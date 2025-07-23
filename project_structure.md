@@ -1,4 +1,7 @@
-witcher3_mod
+The-Witcher-3-Mod-manager
+├── .github
+│   └── workflows
+│       └── build.yml
 ├── api
 │   ├── get_category
 │   │   └── witcher3_categories.json
@@ -290,6 +293,7 @@ witcher3_mod
 │   │   ├── category_dialog.py
 │   │   ├── description_widget.py
 │   │   ├── details_dialog.py
+│   │   ├── dialog_preferences.py
 │   │   ├── main_widget.py
 │   │   ├── main_window.py
 │   │   ├── themes.py
@@ -320,6 +324,7 @@ witcher3_mod
 ├── main.py
 ├── pdm.lock
 ├── project_structure.md
+├── project_structure.txt
 ├── pyproject.toml
 ├── Readme.md
 ├── setup.cfg

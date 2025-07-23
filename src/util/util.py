@@ -1,4 +1,4 @@
-'''Global Helpers'''
+'''Global Helpers with Enhanced File Dialog'''
 # pylint: disable=invalid-name,superfluous-parens,missing-docstring,wildcard-import,unused-wildcard-import,import-outside-toplevel
 
 import os
@@ -12,7 +12,7 @@ from platform import python_version
 from shutil import copytree, rmtree
 from sys import platform
 from threading import Timer
-from typing import Any, Callable
+from typing import Any, Callable, List, Optional
 
 from PySide6 import QtGui, __version__
 from PySide6.QtWidgets import QFileDialog, QMessageBox
@@ -101,15 +101,19 @@ def reconfigureGamePath() -> bool:
     from src.globals.constants import translate
     from src.gui.alerts import MessageNotConfigured
     MessageNotConfigured()
-    dialog = QFileDialog(
-        None,
-        translate("MainWindow", "Select witcher3.exe"),
-        data.config.gameexe or "witcher3.exe",
-        "*.exe")
-    dialog_options = QFileDialog.Option.DontUseNativeDialog if getattr(data.config, 'usenativedialog', '0') != '1' else 0
-    dialog.setOptions(dialog_options)
-    if dialog.exec():
-        gamePath = normalizePath(str(dialog.selectedFiles()[0]))
+    
+    # Enhanced file dialog for game path selection
+    result = getEnhancedFileDialog(
+        parent=None,
+        title=translate("MainWindow", "Select witcher3.exe"),
+        directory=data.config.gameexe or "",
+        file_filter="Executable Files (*.exe);;All Files (*.*)",
+        file_mode='single_file',
+        force_native=True  # Always use native dialog for better UX
+    )
+    
+    if result:
+        gamePath = normalizePath(str(result[0]))
         try:
             data.config.gameexe = gamePath
         except ValueError as err:
@@ -129,15 +133,19 @@ def reconfigureScriptMergerPath():
     from src.globals.constants import translate
     from src.gui.alerts import MessageNotConfiguredScriptMerger
     MessageNotConfiguredScriptMerger()
-    dialog = QFileDialog(
-        None,
-        translate("MainWindow", "Select WitcherScriptMerger.exe"),
-        data.config.scriptmerger or '',
-        "*.exe")
-    dialog_options = QFileDialog.Option.DontUseNativeDialog if getattr(data.config, 'usenativedialog', '0') != '1' else 0
-    dialog.setOptions(dialog_options)
-    if dialog.exec():
-        mergerPath = normalizePath(str(dialog.selectedFiles()[0]))
+    
+    # Enhanced file dialog for script merger selection
+    result = getEnhancedFileDialog(
+        parent=None,
+        title=translate("MainWindow", "Select WitcherScriptMerger.exe"),
+        directory=data.config.scriptmerger or "",
+        file_filter="Executable Files (*.exe);;All Files (*.*)",
+        file_mode='single_file',
+        force_native=True  # Always use native dialog for better UX
+    )
+    
+    if result:
+        mergerPath = normalizePath(str(result[0]))
         if mergerPath:
             data.config.scriptmerger = mergerPath
 
@@ -232,23 +240,191 @@ def restartProgram():
     os.execl(python, python, *sys.argv)
 
 
-def getFile(parent=None, directory="", extensions="", title=None) -> list[str]:
-    '''Opens custom dialog for selecting multiple folders or files'''
+def getEnhancedFileDialog(
+    parent=None, 
+    title: str = None, 
+    directory: str = "", 
+    file_filter: str = "",
+    file_mode: str = 'multiple_files',  # 'single_file', 'multiple_files', 'directory', 'save_file'
+    force_native: bool = False
+) -> List[str]:
+    '''
+    Enhanced file dialog with full Windows native features
+    
+    Args:
+        parent: Parent widget
+        title: Dialog title
+        directory: Starting directory
+        file_filter: File filter (e.g., "Mod Files (*.zip *.rar *.7z);;All Files (*.*)")
+        file_mode: Type of selection ('single_file', 'multiple_files', 'directory', 'save_file')
+        force_native: Force use of native dialog regardless of settings
+    
+    Returns:
+        List of selected file/folder paths
+    '''
     from src.globals import data
     from src.globals.constants import translate
+    
     if title is None:
         title = translate("MainWindow", "Select Files or Folders")
-    dialog = QFileDialog(parent, title, directory, extensions)
-    dialog_options = QFileDialog.Option.ReadOnly | QFileDialog.Option.HideNameFilterDetails
-    if data.config.get('SETTINGS', 'usenativedialog', '0') != '1':
-        dialog_options |= QFileDialog.Option.DontUseNativeDialog
+    
+    # Determine if we should use native dialog
+    use_native = force_native or (data.config.get('SETTINGS', 'usenativedialog', '1') == '1')
+    
+    # Create dialog
+    dialog = QFileDialog(parent, title, directory, file_filter)
+    
+    # Configure dialog options
+    if use_native:
+        # Use native Windows dialog with all features
+        dialog_options = QFileDialog.Option.ReadOnly | QFileDialog.Option.HideNameFilterDetails
+        
+        # Enable native features:
+        # - Quick access to common folders (Documents, Desktop, etc.)
+        # - Recently used folders
+        # - Network locations
+        # - Context menus
+        # - Address bar for direct path navigation
+        # - File versioning support (Previous Versions)
+        print("Using native Windows file dialog with enhanced features")
+    else:
+        # Use Qt dialog (fallback)
+        dialog_options = (QFileDialog.Option.ReadOnly | 
+                         QFileDialog.Option.HideNameFilterDetails | 
+                         QFileDialog.Option.DontUseNativeDialog)
+        print("Using Qt file dialog")
+    
+    # Set file mode based on parameter
+    if file_mode == 'single_file':
+        dialog.setFileMode(QFileDialog.FileMode.ExistingFile)
+    elif file_mode == 'multiple_files':
+        dialog.setFileMode(QFileDialog.FileMode.ExistingFiles)
+    elif file_mode == 'directory':
+        dialog.setFileMode(QFileDialog.FileMode.Directory)
+        dialog_options |= QFileDialog.Option.ShowDirsOnly
+    elif file_mode == 'save_file':
+        dialog.setFileMode(QFileDialog.FileMode.AnyFile)
+        dialog.setAcceptMode(QFileDialog.AcceptMode.AcceptSave)
+    
     dialog.setOptions(dialog_options)
-    dialog.setFileMode(QFileDialog.FileMode.ExistingFiles)
     dialog.setModal(True)
+    
+    # Set view mode for better file browsing
+    if use_native:
+        # Native dialog automatically provides:
+        # - List/Details/Tiles view modes
+        # - Preview pane
+        # - File properties
+        # - Thumbnail view for images
+        pass
+    else:
+        dialog.setViewMode(QFileDialog.ViewMode.Detail)
+    
+    # Execute dialog
     result = []
     if dialog.exec():
         result = dialog.selectedFiles()
-    return [normalizePath(file) for file in result if os.path.isfile(file)]
+        
+        # Store last used directory for future dialogs
+        if result:
+            last_dir = os.path.dirname(result[0])
+            if os.path.isdir(last_dir):
+                data.config.lastpath = last_dir
+    
+    # Return normalized paths
+    return [normalizePath(file) for file in result if os.path.exists(file)]
+
+
+def getFile(parent=None, directory="", extensions="", title=None) -> List[str]:
+    '''
+    ENHANCED: Opens Windows native file dialog with full features for selecting multiple folders or files
+    
+    This new implementation provides:
+    - Quick navigation to common folders (Desktop, Documents, Downloads, etc.)
+    - Recently used folders
+    - Pinned folders and favorites
+    - Network locations and drives
+    - Full Windows context menu support
+    - Address bar for direct path navigation and pasting
+    - File versioning support (Previous Versions via right-click)
+    - Preview pane and thumbnails
+    - Multiple view modes (List, Details, Tiles, etc.)
+    - Search functionality
+    - Drag and drop support
+    '''
+    from src.globals.constants import translate
+    
+    if title is None:
+        title = translate("MainWindow", "Select Mod Files or Folders")
+    
+    # Convert extensions to proper filter format
+    if extensions:
+        # Handle multiple extensions like "*.zip *.rar *.7z"
+        ext_list = extensions.replace("*", "").split()
+        if ext_list:
+            filter_name = "Mod Archives"
+            filter_extensions = " ".join([f"*{ext}" for ext in ext_list])
+            file_filter = f"{filter_name} ({filter_extensions});;All Files (*.*)"
+        else:
+            file_filter = "All Files (*.*)"
+    else:
+        # Default mod file extensions
+        file_filter = "Mod Archives (*.zip *.rar *.7z);;All Files (*.*)"
+    
+    # Use enhanced dialog with native Windows features
+    result = getEnhancedFileDialog(
+        parent=parent,
+        title=title,
+        directory=directory,
+        file_filter=file_filter,
+        file_mode='multiple_files',
+        force_native=True  # Always use native for best user experience
+    )
+    
+    # Filter to only return files (not directories)
+    return [path for path in result if os.path.isfile(path)]
+
+
+def getDirectory(parent=None, directory="", title=None) -> Optional[str]:
+    '''
+    Enhanced directory selection dialog with native Windows features
+    '''
+    from src.globals.constants import translate
+    
+    if title is None:
+        title = translate("MainWindow", "Select Directory")
+    
+    result = getEnhancedFileDialog(
+        parent=parent,
+        title=title,
+        directory=directory,
+        file_filter="",
+        file_mode='directory',
+        force_native=True
+    )
+    
+    return result[0] if result else None
+
+
+def getSaveFile(parent=None, directory="", file_filter="", title=None) -> Optional[str]:
+    '''
+    Enhanced save file dialog with native Windows features
+    '''
+    from src.globals.constants import translate
+    
+    if title is None:
+        title = translate("MainWindow", "Save File")
+    
+    result = getEnhancedFileDialog(
+        parent=parent,
+        title=title,
+        directory=directory,
+        file_filter=file_filter or "All Files (*.*)",
+        file_mode='save_file',
+        force_native=True
+    )
+    
+    return result[0] if result else None
 
 
 def getSize(start_path='.'):

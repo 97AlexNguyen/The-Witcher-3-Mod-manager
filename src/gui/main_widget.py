@@ -46,6 +46,7 @@ from src.gui.category_dialog import CategoryDialog
 from src.util.syntax import *
 from src.util.util import *
 from src.gui.description_widget import DescriptionWidget
+from src.gui.dialog_preferences import showDialogPreferences
 from src.util.mod_description_fetcher import ModDescriptionFetcher
 
 class ModsSettingsWatcher(QThread):
@@ -68,7 +69,7 @@ class ModsSettingsWatcher(QThread):
     def __del__(self):
         '''Clean up the observer when this object is destroyed'''
         if hasattr(self, "observer") and self.observer:
-            self.observer.stop()
+            self.observer.stop() 
             self.observer.join()
             self.observer = None
 
@@ -325,7 +326,6 @@ class CustomMainWidget(QWidget):
         self.actionFetchDescription.triggered.connect(self.fetchDescription)
         self.actionRefreshDescription.triggered.connect(self.refreshDescription)
         
-        # Kết nối selection changed để hiển thị description
         self.treeWidget.itemSelectionChanged.connect(self.onModSelectionChanged)
 
         self.scriptMergerButton.clicked.connect(self.runScriptMerger)
@@ -357,43 +357,78 @@ class CustomMainWidget(QWidget):
 
 
     def openMenu(self, position):
-        '''Right click menu on mod list (Left panel)'''
+        '''Right click context menu with better organization'''
         menu = QMenu()
+        
+        # Mod info section
         menu.addAction(self.actionDetails)
         menu.addSeparator()
-        menu.addAction(self.actionSetPriority)
-        menu.addAction(self.actionUnsetPriority)
-        menu.addAction(self.actionSetCategory)
+        
+        # Mod properties section  
+        mod_props = QMenu(translate("MainWindow", "Properties"))
+        mod_props.addAction(self.actionSetCategory)
+        mod_props.addAction(self.actionSetPriority)
+        mod_props.addAction(self.actionUnsetPriority)
+        menu.addAction(mod_props.menuAction())
         menu.addSeparator()
         
-        # NEW: Thêm Nexus Mods actions
+        # Nexus Mods section (if applicable)
         selected = self.getSelectedMods()
-        if selected and len(selected) == 1:  # Chỉ hiển thị khi chọn 1 mod
+        if selected and len(selected) == 1:
             mod = self.model.get(selected[0])
             if mod.mod_id:
-                menu.addAction(self.actionOpenNexusPage)
-                menu.addAction(self.actionFetchDescription)
-                menu.addAction(self.actionRefreshDescription)
-                menu.addAction(self.actionUpdateCategoryFromNexus)  # NEW
+                nexus_menu = QMenu(translate("MainWindow", "Nexus Mods"))
+                nexus_menu.addAction(self.actionOpenNexusPage)
+                nexus_menu.addAction(self.actionFetchDescription)
+                nexus_menu.addAction(self.actionRefreshDescription)
+                nexus_menu.addAction(self.actionUpdateCategoryFromNexus)
+                menu.addAction(nexus_menu.menuAction())
                 menu.addSeparator()
         
+        # File operations section
         menu.addAction(self.actionOpenFolder)
         menu.addSeparator()
+        
+        # Mod management section
         menu.addAction(self.actionRename)
         menu.addAction(self.actionReinstall_Mods)
         menu.addAction(self.actionUninstall_Mods)
         menu.addAction(self.actionEnable_Disable_Mods)
+        
         menu.exec(self.treeWidget.viewport().mapToGlobal(position))
+
+
+
 
     # 6. Thêm methods mới để xử lý Nexus Mods:
     def onModSelectionChanged(self):
-        '''Handle when mod selection changes'''
-        selected = self.getSelectedMods()
-        if selected and len(selected) == 1:
-            mod = self.model.get(selected[0])
-            self.descriptionWidget.display_description(mod, fetch_if_needed=True)
-        else:
+        '''Handle when mod selection changes - FIXED to handle category groups'''
+        try:
+            selected = self.getSelectedMods()
+            if selected and len(selected) == 1:
+                mod_name = selected[0]
+                
+                # Check if this is a category group (starts and ends with brackets)
+                if mod_name.startswith('[') and mod_name.endswith(']'):
+                    # This is a category group, not a mod, so clear description
+                    self.descriptionWidget.clear_description()
+                    return
+                
+                # Check if mod exists in model
+                try:
+                    mod = self.model.get(mod_name)
+                    self.descriptionWidget.display_description(mod, fetch_if_needed=True)
+                except KeyError:
+                    # Mod not found, clear description
+                    self.descriptionWidget.clear_description()
+                    print(f"Warning: Mod '{mod_name}' not found in model")
+            else:
+                self.descriptionWidget.clear_description()
+        except Exception as e:
+            print(f"Error in onModSelectionChanged: {e}")
             self.descriptionWidget.clear_description()
+
+
 
     def openNexusPage(self):
         '''Open Nexus Mods page for selected mod'''
@@ -647,11 +682,23 @@ class CustomMainWidget(QWidget):
                 self.output(formatUserError(err))
 
     def modToggled(self, item, column):
-        '''Triggered when the mod check state is changed.
-        Enables or disables the mod based on the current check state'''
+        '''Triggered when the mod check state is changed - FIXED to handle category groups'''
         try:
+            mod_name = item.text(1)
+            
+            # Skip category groups
+            if mod_name.startswith('[') and mod_name.endswith(']'):
+                return
+            
+            # Check if mod exists
+            try:
+                mod = self.model.get(mod_name)
+            except KeyError:
+                print(f"Warning: Mod '{mod_name}' not found in model")
+                return
+            
             if item.checkState(column) == Qt.Checked:
-                incomplete = self.model.get(item.text(1)).enable()
+                incomplete = mod.enable()
                 if incomplete:
                     for i in incomplete:
                         self.output(
@@ -660,12 +707,14 @@ class CustomMainWidget(QWidget):
                             + translate("MainWindow", " could not be automatically installed.")
                         )
             elif item.checkState(column) == Qt.Unchecked:
-                self.model.get(item.text(1)).disable()
+                mod.disable()
+                
             self.model.write()
             self.refreshLoadOrder()
             self.alertRunScriptMerger()
         except Exception as err:
             self.output(formatUserError(err))
+
 
     def modDoubleClicked(self):
         '''Triggered when double clicked on the mod'''
@@ -743,11 +792,13 @@ class CustomMainWidget(QWidget):
         data.config.write_config()
 
     def nativeFileDialogsChanged(self):
-        '''Triggered when option to use native file dialogs is changed. Saves the change'''
+        '''Updated - Triggered when option to use native file dialogs is changed'''
         if self.actionUseNativeFileDialogs.isChecked():
             data.config.set("SETTINGS", "usenativedialog", "1")
+            self.output(translate("MainWindow", "Tip: Use 'File Dialog Preferences' in Settings menu for more options"))
         else:
             data.config.set("SETTINGS", "usenativedialog", "0")
+
 
     def changeLanguage(self, language):
         '''Triggered when language is changed. Saves the change and restarts the program'''
@@ -842,10 +893,25 @@ class CustomMainWidget(QWidget):
         reconfigureScriptMergerPath()
 
     def installMods(self):
-        '''Installs selected mods'''
+        '''Enhanced - Installs selected mods using enhanced file dialog'''
         self.clear()
-        file = getFile(self, data.config.lastpath, "*.zip *.rar *.7z")
-        self.installModFiles(file)
+        
+        # Sử dụng enhanced file dialog
+        from src.util.util import getFile
+        
+        files = getFile(
+            parent=self, 
+            directory=data.config.lastpath or "", 
+            extensions="*.zip *.rar *.7z",
+            title=translate("MainWindow", "Select Mod Archives to Install")
+        )
+        
+        if files:
+            self.output(translate("MainWindow", f"Installing {len(files)} mod file(s)..."))
+            self.installModFiles(files)
+        else:
+            self.output(translate("MainWindow", "Installation canceled - no files selected"))
+
 
     def installModFiles(self, file):
         '''Installs passed list of mods'''
@@ -1268,8 +1334,6 @@ class CustomMainWidget(QWidget):
         return item
 
     def addToGroupedList(self, item, category):
-        '''Add item to category group'''
-        # Tìm hoặc tạo category group
         category_item = None
         for i in range(self.treeWidget.topLevelItemCount()):
             top_item = self.treeWidget.topLevelItem(i)
@@ -1278,24 +1342,39 @@ class CustomMainWidget(QWidget):
                 break
         
         if not category_item:
-            # Tạo category group mới
+
             category_item = CustomTreeWidgetItem([
                 "", f"[{category}]", "", "", "", "", "", "", "", "", "", "", ""
             ])
             category_item.setExpanded(True)
+            
+            from PySide6.QtGui import QFont
+            font = QFont()
+            font.setBold(True)
+            category_item.setFont(1, font)
+            
+            category_item.setFlags(category_item.flags() & ~Qt.ItemIsUserCheckable)
+            
             self.treeWidget.addTopLevelItem(category_item)
         
         category_item.addChild(item)
-    
+
 
     def getSelectedMods(self):
-        '''Returns list of mod names of the selected mods'''
+        '''Returns list of mod names of the selected mods - FIXED to handle category groups'''
         array = []
         getSelected = self.treeWidget.selectedItems()
         if getSelected:
             for selected in getSelected:
-                baseNode = selected
-                array.append(baseNode.text(1))
+                mod_name = selected.text(1)
+                
+                # Skip category groups
+                if mod_name.startswith('[') and mod_name.endswith(']'):
+                    continue
+                    
+                # Skip empty names
+                if mod_name.strip():
+                    array.append(mod_name)
         return array
 
     def getSelectedFiles(self):
@@ -1381,6 +1460,15 @@ class CustomMainWidget(QWidget):
         self.actionEnable_Disable_Mods.setIconVisibleInMenu(False)
         self.actionEnable_Disable_Mods.setObjectName("actionEnable_Disable_Mods")
         self.actionEnable_Disable_Mods.setIconText(translate("MainWindow", "Toggle"))
+
+        self.actionDialogPreferences = QAction(self.mainWindow)
+        self.actionDialogPreferences.setObjectName("actionDialogPreferences")
+        self.actionDialogPreferences.triggered.connect(self.showDialogPreferences)
+        
+        # THÊM action cho enhanced file browser
+        self.actionEnhancedFileBrowser = QAction(self.mainWindow)
+        self.actionEnhancedFileBrowser.setObjectName("actionEnhancedFileBrowser")
+        self.actionEnhancedFileBrowser.triggered.connect(self.showEnhancedFileBrowser)
 
         self.actionBatchUpdateCategories = QAction(self.mainWindow)
         self.actionBatchUpdateCategories.setObjectName("actionBatchUpdateCategories")
@@ -1479,49 +1567,105 @@ class CustomMainWidget(QWidget):
             self.menuSelect_Theme.addAction(action)
 
     def createMenus(self):
-        '''Create menu objects'''
-
+        '''Create menu objects with improved structure'''
+        
         self.menubar.clear()
 
-        # Create main menus
-
+        # === MENU CHÍNH ===
+        
+        # 1. FILE MENU - Các thao tác với files/folders
         self.menuFile = QMenu(self.menubar)
-        self.menuFile.setObjectName("menuFile")
-        self.menuFile.setTitle(translate("MainWindow", "Mods"))
-
+        self.menuFile.setObjectName("menuFile") 
+        self.menuFile.setTitle(translate("MainWindow", "File"))
+        
+        # 2. MOD MENU - Các thao tác với mods
+        self.menuMod = QMenu(self.menubar)
+        self.menuMod.setObjectName("menuMod")
+        self.menuMod.setTitle(translate("MainWindow", "Mod"))
+        
+        # 3. EDIT MENU - Các thao tác chỉnh sửa 
         self.menuEdit = QMenu(self.menubar)
         self.menuEdit.setObjectName("menuEdit")
         self.menuEdit.setTitle(translate("MainWindow", "Edit"))
-
+        
+        # 4. VIEW MENU - Các tùy chọn hiển thị
+        self.menuView = QMenu(self.menubar)
+        self.menuView.setObjectName("menuView")
+        self.menuView.setTitle(translate("MainWindow", "View"))
+        
+        # 5. TOOLS MENU - Các công cụ bổ trợ
+        self.menuTools = QMenu(self.menubar)
+        self.menuTools.setObjectName("menuTools")
+        self.menuTools.setTitle(translate("MainWindow", "Tools"))
+        
+        # 6. SETTINGS MENU - Cài đặt
         self.menuSettings = QMenu(self.menubar)
         self.menuSettings.setObjectName("menuSettings")
         self.menuSettings.setTitle(translate("MainWindow", "Settings"))
-
+        
+        # 7. HELP MENU
         self.menuHelp = QMenu(self.menubar)
         self.menuHelp.setObjectName("menuHelp")
         self.menuHelp.setTitle(translate("MainWindow", "Help"))
 
-        # Create Settings submenus
-
+        # === SUBMENUS ===
+        
+        # Settings submenus
         self.menuSelect_Theme = QMenu(self.menuSettings)
         self.menuSelect_Theme.setObjectName("menuSelect_Theme")
-        self.menuSelect_Theme.setTitle(translate("MainWindow", "Select Theme"))
+        self.menuSelect_Theme.setTitle(translate("MainWindow", "Theme"))
 
         self.menuSelect_Language = QMenu(self.menuSettings)
-        self.menuSelect_Language.setObjectName("menuSelect_Language")
-        self.menuSelect_Language.setTitle(translate("MainWindow", "Select Language"))
+        self.menuSelect_Language.setObjectName("menuSelect_Language") 
+        self.menuSelect_Language.setTitle(translate("MainWindow", "Language"))
 
-        self.menuConfigure_Settings = QMenu(self.menuSettings)
-        self.menuConfigure_Settings.setObjectName("menuConfigure_Settings")
-        self.menuConfigure_Settings.setTitle(translate("MainWindow", "Change Setting"))
+        self.menuConfigure = QMenu(self.menuSettings)
+        self.menuConfigure.setObjectName("menuConfigure")
+        self.menuConfigure.setTitle(translate("MainWindow", "Configuration"))
 
-        # Add main menus to menubar
-
+        # Add to menubar
         self.menubar.addAction(self.menuFile.menuAction())
+        self.menubar.addAction(self.menuMod.menuAction())
         self.menubar.addAction(self.menuEdit.menuAction())
+        self.menubar.addAction(self.menuView.menuAction())
+        self.menubar.addAction(self.menuTools.menuAction())
         self.menubar.addAction(self.menuSettings.menuAction())
         self.menubar.addAction(self.menuHelp.menuAction())
 
+
+
+    def showDialogPreferences(self):
+        '''Show dialog preferences configuration'''
+        try:
+            showDialogPreferences(self)
+            self.output(translate("MainWindow", "Dialog preferences updated"))
+        except Exception as err:
+            self.output(formatUserError(err))
+
+    def showEnhancedFileBrowser(self):
+        '''Show enhanced file browser for mod installation'''
+        try:
+            from src.util.util import getFile
+            from src.globals import data
+            
+            self.output(translate("MainWindow", "Opening enhanced file browser..."))
+            
+            # Use enhanced file dialog with all Windows features
+            files = getFile(
+                parent=self,
+                directory=data.config.lastpath or "",
+                extensions="*.zip *.rar *.7z",
+                title=translate("MainWindow", "Select Mod Files - Enhanced Browser")
+            )
+            
+            if files:
+                self.output(f"Selected {len(files)} file(s) for installation")
+                self.installModFiles(files)
+            else:
+                self.output(translate("MainWindow", "No files selected"))
+                
+        except Exception as err:
+            self.output(formatUserError(err))
 
 
     def updateCategoryFromNexus(self):
@@ -1592,75 +1736,88 @@ class CustomMainWidget(QWidget):
 
 
     def populateMenu(self):
-        '''Populate the menu and submenus'''
+        '''Populate menus with improved organization'''
+        
+        # Clear all menus
+        for menu in [self.menuFile, self.menuMod, self.menuEdit, self.menuView, 
+                    self.menuTools, self.menuSettings, self.menuHelp]:
+            menu.clear()
 
-        self.menuFile.clear()
-        self.menuEdit.clear()
-        self.menuSettings.clear()
-        self.menuHelp.clear()
-        self.menuConfigure_Settings.clear()
-
-        # --- Build File/Mods menu ---
-        self.menuFile.addAction(self.actionInstall_Mods)
-        self.menuFile.addAction(self.actionUninstall_Mods)
-        self.menuFile.addAction(self.actionEnable_Disable_Mods)
+        # === FILE MENU - File operations ===
+        self.menuFile.addAction(self.actionEnhancedFileBrowser)
         self.menuFile.addSeparator()
         self.menuFile.addAction(self.actionOpenFolder)
         self.menuFile.addSeparator()
-        self.menuFile.addAction(self.actionReinstall_Mods)
-        self.menuFile.addAction(self.actionRefresh_Mod_List)
-        self.menuFile.addAction(self.actionRefresh_Load_Order)
-        self.menuFile.addAction(self.actionSelect_All_Mods)
+        # Export/Import functions có thể thêm vào đây
 
-        # --- Build Edit menu ---
-        self.menuEdit.addAction(self.actionDetails)
+        # === MOD MENU - Mod management ===
+        self.menuMod.addAction(self.actionInstall_Mods)
+        self.menuMod.addAction(self.actionUninstall_Mods)
+        self.menuMod.addAction(self.actionReinstall_Mods)
+        self.menuMod.addSeparator()
+        self.menuMod.addAction(self.actionEnable_Disable_Mods)
+        self.menuMod.addSeparator()
+        self.menuMod.addAction(self.actionRefresh_Mod_List)
+        self.menuMod.addAction(self.actionSelect_All_Mods)
+
+        # === EDIT MENU - Editing operations ===
         self.menuEdit.addAction(self.actionRename)
+        self.menuEdit.addAction(self.actionDetails)
+        self.menuEdit.addSeparator()
+        self.menuEdit.addAction(self.actionSetCategory)
         self.menuEdit.addSeparator()
         self.menuEdit.addAction(self.actionSetPriority)
         self.menuEdit.addAction(self.actionUnsetPriority)
-        self.menuEdit.addSeparator()
         self.menuEdit.addAction(self.actionIncreasePriority)
         self.menuEdit.addAction(self.actionDecreasePriority)
 
-        # --- Build Help menu ---
+        # === VIEW MENU - Display options ===
+        self.menuView.addAction(self.actionGroupByCategory)
+        self.menuView.addSeparator()
+        self.menuView.addAction(self.actionRefresh_Load_Order)
+        self.menuView.addSeparator()
+        self.menuView.addAction(self.actionRestoreColumns)
+        self.menuView.addSeparator()
+        self.menuView.addAction(self.actionClearOutput)
+
+        # === TOOLS MENU - External tools and utilities ===
+        self.menuTools.addAction(self.actionRun_Script_Merger)
+        self.menuTools.addAction(self.actionRun_The_Game)
+        self.menuTools.addSeparator()
+        
+        # Nexus Mods tools submenu
+        self.menuNexusMods = QMenu(self.menuTools)
+        self.menuNexusMods.setTitle(translate("MainWindow", "Nexus Mods"))
+        self.menuNexusMods.addAction(self.actionBatchUpdateCategories)
+        self.menuNexusMods.addAction(self.actionUpdateCategoryFromNexus)
+        self.menuNexusMods.addSeparator()
+        self.menuNexusMods.addAction(self.actionOpenNexusPage)
+        self.menuNexusMods.addAction(self.actionFetchDescription)
+        self.menuNexusMods.addAction(self.actionRefreshDescription)
+        self.menuTools.addAction(self.menuNexusMods.menuAction())
+
+        # === SETTINGS MENU ===
+        self.menuSettings.addAction(self.menuSelect_Theme.menuAction())
+        self.menuSettings.addAction(self.menuSelect_Language.menuAction())
+        self.menuSettings.addSeparator()
+        self.menuSettings.addAction(self.menuConfigure.menuAction())
+        
+        # Configure submenu
+        self.menuConfigure.addAction(self.actionChange_Game_Path)
+        self.menuConfigure.addAction(self.actionChange_Script_Merger_Path)
+        self.menuConfigure.addSeparator()
+        self.menuConfigure.addAction(self.actionDialogPreferences)
+        self.menuConfigure.addSeparator()
+        self.menuConfigure.addAction(self.actionAlert_to_run_Script_Merger)
+        self.menuConfigure.addAction(self.actionUseNativeFileDialogs)
+
+        # === HELP MENU ===
         self.menuHelp.addAction(self.actionAbout)
+        self.menuHelp.addSeparator()
         self.menuHelp.addAction(self.actionMain_Web_Page)
         self.menuHelp.addAction(self.actionGitHub)
 
-        self.menuView = QMenu(self.menubar)
-        self.menuView.setObjectName("menuView")
-        self.menuView.setTitle(translate("MainWindow", "View"))
-        self.menubar.insertAction(self.menuSettings.menuAction(), self.menuView.menuAction())
-        
-        self.menuView.addAction(self.actionGroupByCategory)
-        self.menuView.addSeparator()
-        self.menuView.addAction(self.actionRestoreColumns)
 
-        # --- Build Settings submenus ---
-
-        self.menuTools = QMenu(self.menubar)
-        self.menuTools.setObjectName("menuTools")
-        self.menuTools.setTitle(translate("MainWindow", "Tools"))
-        self.menubar.insertAction(self.menuHelp.menuAction(), self.menuTools.menuAction())
-        
-        self.menuTools.addAction(self.actionBatchUpdateCategories)
-        self.menuTools.addSeparator()
-        self.menuTools.addAction(self.actionRun_Script_Merger)
-        self.menuTools.addAction(self.actionRun_The_Game)
-
-        # Configure Settings submenu
-        self.menuConfigure_Settings.addAction(self.actionChange_Game_Path)
-        self.menuConfigure_Settings.addAction(self.actionChange_Script_Merger_Path)
-        self.menuConfigure_Settings.addSeparator()
-        self.menuConfigure_Settings.addAction(self.actionRestoreColumns)
-        self.menuConfigure_Settings.addSeparator()
-        self.menuConfigure_Settings.addAction(self.actionAlert_to_run_Script_Merger)
-        self.menuConfigure_Settings.addAction(self.actionUseNativeFileDialogs)
-
-        # Add submenus to Settings menu
-        self.menuSettings.addAction(self.menuSelect_Theme.menuAction())
-        self.menuSettings.addAction(self.menuSelect_Language.menuAction())
-        self.menuSettings.addAction(self.menuConfigure_Settings.menuAction())
 
     def translateUi(self):
         self.mainWindow.setWindowTitle(translate("MainWindow", TITLE))
@@ -1678,6 +1835,14 @@ class CustomMainWidget(QWidget):
         self.treeWidget.headerItem().setText(10, translate("MainWindow", "Settings"))
         self.treeWidget.headerItem().setText(11, translate("MainWindow", "Size"))
         self.treeWidget.headerItem().setText(12, translate("MainWindow", "Date Installed"))
+
+        self.actionDialogPreferences.setText(translate("MainWindow", "File Dialog Preferences..."))
+        self.actionDialogPreferences.setToolTip(translate("MainWindow", "Configure file dialog behavior and features"))
+        self.actionDialogPreferences.setShortcut("Ctrl+Shift+D")
+        
+        self.actionEnhancedFileBrowser.setText(translate("MainWindow", "Enhanced File Browser..."))
+        self.actionEnhancedFileBrowser.setToolTip(translate("MainWindow", "Open enhanced file browser with Windows features"))
+        self.actionEnhancedFileBrowser.setShortcut("Ctrl+B")
 
         self.actionBatchUpdateCategories.setText(translate("MainWindow", "Batch Update Categories"))
         self.actionBatchUpdateCategories.setToolTip(translate("MainWindow", "Update categories for all mods with mod ID from Nexus Mods"))
