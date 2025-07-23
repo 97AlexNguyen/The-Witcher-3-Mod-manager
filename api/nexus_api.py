@@ -1,15 +1,3 @@
-#!/usr/bin/env python3
-"""Simple CLI script to fetch a Witcher 3 mod's data from the Nexus Mods public API.
-
-Usage
------
-$ python fetch_nexus_mod.py 9963                          # API key via env var
-$ python fetch_nexus_mod.py 9963 YOUR_API_KEY_HERE        # API key via arg
-
-The script prints the full JSON response to stdout. Pipe it to `jq` or redirect
-it to a file if you only need certain fields.
-"""
-
 import json
 import os
 import sys
