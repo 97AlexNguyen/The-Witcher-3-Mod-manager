@@ -8,6 +8,7 @@ from base64 import b64decode, b64encode
 
 from fasteners import InterProcessLock
 
+from src.domain import mod
 from src.domain.mod import Mod
 from src.domain.key import Key
 from src.globals import data
@@ -15,7 +16,7 @@ from src.core.fetcher import *
 from src.util.util import *
 from src.util.syntax import *
 from src.gui.alerts import MessageAlertReadingConfigurationFailed, MessageAlertWritingFailed
-
+from src.util.text_sanitize import sanitize_text_for_ui
 
 class Model:
     '''Mod management model'''
@@ -179,7 +180,13 @@ class Model:
         if mod.mod_id:
             elem.set('mod_id', mod.mod_id)
         if mod.description:
-            elem.set('description', mod.description)
+            safe_desc = sanitize_text_for_ui(
+                mod.description,
+                allow_unicode_letters=True,
+                xml_escape=True,     # thoát & < >
+                max_length=5000      # hoặc rút ngắn để file gọn
+            )
+            elem.set('description', safe_desc)
 
         if mod.files:
             for file in mod.files:

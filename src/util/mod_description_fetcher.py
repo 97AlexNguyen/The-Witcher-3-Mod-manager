@@ -18,7 +18,7 @@ from urllib3.util.retry import Retry
 
 from src.globals import data
 from src.util.util import normalizePath, getProgramRootFolder
-
+from src.util.text_sanitize import sanitize_text_for_ui
 
 class CategoryManager:
     '''Manager for handling category mapping'''
@@ -678,15 +678,39 @@ class ModDescriptionFetcher:
                 return result[0], result[1]
             return None, None
     
-    def cache_description_and_category(self, mod_id: str, description: str, category: str, source: str = 'web', success: bool = True):
-        '''Cache description and category in database with request logging'''
+
+    def _prepare_description(self, raw_desc: str) -> str:
+        # Bạn muốn giữ Unicode tiếng Việt? true. Nếu không, false.
+        return sanitize_text_for_ui(
+            raw_desc,
+            allow_unicode_letters=True,   # hoặc False nếu UI ASCII-only
+            collapse_whitespace=True,
+            ascii_fallback=False,         # bật nếu engine không chịu Unicode
+            xml_escape=False,             # chỉ escape khi ghi XML; UI label thì ko cần
+            max_length=5000,              # tuỳ giới hạn DB / widget
+        )
+
+    def _prepare_category(self, raw_cat: str) -> str:
+        return sanitize_text_for_ui(
+            raw_cat,
+            allow_unicode_letters=False,  # category nên chuẩn ASCII, tránh lỗi
+            collapse_whitespace=True,
+            ascii_fallback=False,
+            xml_escape=False,
+            max_length=300,
+        )
+
+
+    def cache_description_and_category(self, mod_id, description, category, source='web', success=True):
+        clean_desc = self._prepare_description(description or "")
+        raw_cat = category or "Miscellaneous"
+        clean_cat = self._prepare_category(raw_cat)
         with sqlite3.connect(self.db_path) as conn:
-            # Cache description and category
             conn.execute(
                 '''INSERT OR REPLACE INTO mod_descriptions 
-                   (mod_id, description, category, source, last_accessed, fetched_date) 
-                   VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)''',
-                (mod_id, description, category, source)
+                (mod_id, description, category, source, last_accessed, fetched_date) 
+                VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)''',
+                (mod_id, clean_desc, clean_cat, source)
             )
             
             # Log request
@@ -705,14 +729,15 @@ class ModDescriptionFetcher:
         '''Fetch description and category from Nexus API'''
         if not self.nexus_api or self.api_status != "available":
             return None, None, "API not available"
-        
+        raw_desc = self.nexus_api.extract_description_from_api_data(api_data)
+        raw_cat = self.nexus_api.extract_category_from_api_data(api_data)
         try:
             print(f"Fetching mod {mod_id} info from Nexus API...")
             api_data = self.nexus_api.get_mod_info(mod_id)
             
             if api_data:
-                description = self.nexus_api.extract_description_from_api_data(api_data)
-                category = self.nexus_api.extract_category_from_api_data(api_data)
+                description = self._prepare_description(raw_desc)  # <‑‑ thêm dòng này
+                category = self._prepare_category(raw_cat)       # <‑‑ thêm dòng này
                 return description, category, "success"
             else:
                 return None, None, "Mod not found on Nexus"

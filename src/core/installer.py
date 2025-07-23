@@ -16,7 +16,7 @@ from src.globals.constants import translate
 from src.gui.alerts import MessageAlertModFromGamePath, MessageOverwrite
 from src.util.util import *
 from src.util.mod_description_fetcher import ModDescriptionFetcher
-
+from src.util.text_sanitize import sanitize_text_for_ui
 @dataclass
 class Installer:
     '''Mod Installer với enhanced category và description auto-detection'''
@@ -256,6 +256,7 @@ class Installer:
         finally:
             if path.exists(data.config.extracted):
                 removeDirectory(data.config.extracted)
+
         return result, installCount, incompleteCount
 
 
