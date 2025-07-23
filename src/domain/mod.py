@@ -1,9 +1,5 @@
-'''Mod Class'''
-# pylint: disable=invalid-name,wildcard-import,unused-wildcard-import,superfluous-parens,missing-docstring
-
 import re
 from configparser import ConfigParser
-from dataclasses import dataclass, field
 from os import path, rename, walk
 from time import gmtime, strftime
 from typing import List, Optional, Union, Tuple
@@ -17,27 +13,108 @@ from src.gui.alerts import MessageRebindKeys
 from src.util.util import *
 
 
-@dataclass
 class Mod:
     '''Mod object containing all mod data'''
 
-    _name: str = ''
-    _priority: Optional[str] = ''
-    enabled: bool = True
-    date: str = ''
-    source: str = ''
+    def __init__(self):
+        self._name: str = ''
+        self._priority: Optional[str] = ''
+        self._category: str = 'General'
+        self._mod_id: Optional[str] = None 
+        self._description: Optional[str] = None  
+        self.enabled: bool = True
+        self.date: str = ''
+        self.source: str = ''
 
-    files: List[str] = field(default_factory=list)
-    dlcs: List[str] = field(default_factory=list)
-    menus: List[str] = field(default_factory=list)
-    xmlkeys: List[str] = field(default_factory=list)
-    usersettings: List[object] = field(default_factory=list)
-    inputsettings: List[object] = field(default_factory=list)
-    hidden: List[str] = field(default_factory=list)
-    readmes: List[str] = field(default_factory=list)
-
-    def __post_init__(self):
+        self.files: List[str] = []
+        self.dlcs: List[str] = []
+        self.menus: List[str] = []
+        self.xmlkeys: List[str] = []
+        self.usersettings: List[object] = []
+        self.inputsettings: List[object] = []
+        self.hidden: List[str] = []
+        self.readmes: List[str] = []
+        
         self.date = strftime("%Y-%m-%d %H:%M:%S", gmtime())
+
+    @property
+    def category(self) -> str:
+        return self._category
+
+    @category.setter
+    def category(self, value: str) -> None:
+        self._category = value if value else 'General'
+
+    @property
+    def mod_id(self) -> Optional[str]:
+        return self._mod_id
+
+    @mod_id.setter  
+    def mod_id(self, value: Optional[str]) -> None:
+        self._mod_id = value
+
+    @property
+    def description(self) -> Optional[str]:
+        return self._description
+
+    @description.setter
+    def description(self, value: Optional[str]) -> None:
+        self._description = value
+
+    def get_nexus_url(self) -> str:
+        '''Get Nexus Mods URL for this mod'''
+        if self.mod_id:
+            return f"https://www.nexusmods.com/witcher3/mods/{self.mod_id}"
+        return ""
+
+    def fetch_description_if_needed(self) -> str:
+        '''Fetch description from Nexus if not already cached'''
+        if self.description:
+            return self.description
+        
+        if self.mod_id:
+            from src.util.mod_description_fetcher import ModDescriptionFetcher
+            fetcher = ModDescriptionFetcher()
+            self.description = fetcher.get_description(self.mod_id)
+            return self.description
+        
+        return "No description available"
+    @staticmethod
+    def get_predefined_categories() -> List[str]:
+        '''Returns a list of predefined categories for mods of the Witcher 3'''
+        return [
+            'General',
+            'Alchemy and Crafting',
+            'Armor and Clothing',
+            'Audio and Music',
+            'Balancing and Gameplay',
+            'Bug Fixes',
+            'Camera and Controls',
+            'Characters and NPCs',
+            'Cheats and God items',
+            'Combat',
+            'Controller buttons Layout',
+            'Debug Console',
+            'Gameplay Changes',
+            'Gwent',
+            'Hair and Face',
+            'Immersion',
+            'Inventory',
+            'Items',
+            'Miscellaneous',
+            'Modders Resources',
+            'Models and Textures',
+            'Overhauls',
+            'Performance',
+            'Quests and Adventures',
+            'Signs',
+            'Skills and Leveling',
+            'Tweaks',
+            'Utilities',
+            'Visuals and Graphics',
+            'Weapons',
+            'Weather and Armor'
+        ]
 
     @property
     def name(self) -> str:
@@ -394,8 +471,19 @@ class Mod:
             os.fsync(userfile.fileno())
 
     def __repr__(self):
-        string = translate("MOD", "NAME: ") + str(self.name) + "\n" + translate("MOD", "ENABLED: ") + str(self.enabled) + \
+        string = translate("MOD", "NAME: ") + str(self.name) + "\n" + \
+                translate("MOD", "CATEGORY: ") + str(self.category) + "\n" + \
+                translate("MOD", "ENABLED: ") + str(self.enabled) + \
             "\n" + translate("MOD", "PRIORITY: ") + self.priority + "\n"
+        
+        # Thêm mod ID và description
+        if self.mod_id:
+            string += translate("MOD", "MOD ID: ") + str(self.mod_id) + "\n"
+            string += translate("MOD", "NEXUS URL: ") + self.get_nexus_url() + "\n"
+        
+        if self.description:
+            string += "\n" + translate("MOD", "DESCRIPTION: ") + "\n" + str(self.description) + "\n"
+        
         if (self.files):
             string += "\n"+translate("MOD", "DATA:")+"\n"
             for file in iter(self.files):

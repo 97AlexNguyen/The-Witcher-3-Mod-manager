@@ -1,4 +1,4 @@
-'''Core functionality'''
+'''Core functionality - Updated với category auto-detection'''
 # pylint: disable=invalid-name,superfluous-parens,bare-except,broad-except,wildcard-import,unused-wildcard-import,missing-docstring
 
 from dataclasses import dataclass
@@ -15,11 +15,11 @@ from src.globals import data
 from src.globals.constants import translate
 from src.gui.alerts import MessageAlertModFromGamePath, MessageOverwrite
 from src.util.util import *
-
+from src.util.mod_description_fetcher import ModDescriptionFetcher
 
 @dataclass
 class Installer:
-    '''Mod Installer'''
+    '''Mod Installer với enhanced category và description auto-detection'''
 
     model: Model
     ask: bool = True
@@ -28,7 +28,7 @@ class Installer:
     output: Callable[[str], Any] = lambda _: None
 
     def installMod(self, modPath: str) -> Tuple[bool, int, int]:
-        '''Installs mod from given path. If given mod is an archive first extracts it'''
+        '''Installs mod from given path với automatic category và description detection'''
 
         realModPath = os.path.realpath(modPath)
         realGamePath = os.path.realpath(data.config.game)
@@ -44,11 +44,62 @@ class Installer:
         self.progress(0.1)
         mod = None
         result = True
+
         try:
             mod, directories, xmls = fetchMod(modPath)
 
             mod.date = strftime("%Y-%m-%d %H:%M:%S", gmtime())
             mod.name = modname
+
+            # ENHANCED: Mod ID extraction và automatic info fetching
+            fetcher = ModDescriptionFetcher()
+            original_filename = path.basename(modPath)
+            extracted_id = fetcher.extract_mod_id_from_filename(original_filename)
+
+            if extracted_id:
+                mod.mod_id = extracted_id
+                self.output(f"✓ Detected mod ID: {extracted_id}")
+                
+                # Tự động fetch cả description VÀ category
+                try:
+                    self.output(f"Fetching description và category cho mod {mod.name}...")
+                    
+                    # Tạo callback để output messages
+                    def output_callback(message):
+                        self.output(f"  {message}")
+                    
+                    # NEW: Sử dụng method mới để lấy cả description và category
+                    description, category = fetcher.get_description_and_category(
+                        extracted_id, output_callback
+                    )
+                    
+                    # Set description nếu có và hợp lệ
+                    if description and description not in [
+                        "No mod ID available", 
+                        "Invalid mod ID format", 
+                        "Failed to fetch description from both API and web scraping"
+                    ]:
+                        mod.description = description
+                        self.output(f"✓ Description fetched successfully")
+                    else:
+                        self.output(f"ℹ No description available")
+                    
+                    # NEW: Set category nếu có và hợp lệ
+                    if category and category != "Miscellaneous":
+                        mod.category = category
+                        self.output(f"✓ Category detected: {category}")
+                    else:
+                        mod.category = "Miscellaneous"
+                        self.output(f"ℹ Using default category: Miscellaneous")
+                        
+                except Exception as e:
+                    self.output(f"⚠ Could not fetch mod info: {str(e)}")
+                    # Set default values nếu fetch thất bại
+                    mod.category = "Miscellaneous"
+            else:
+                self.output("ℹ Could not detect mod ID from filename")
+                # Set default category nếu không có mod ID
+                mod.category = "Miscellaneous"
 
             if not data.config.mods:
                 raise Exception(
@@ -167,12 +218,34 @@ class Installer:
                     installed.menus = mod.menus
                     installed.inputsettings = mod.inputsettings
                     installed.readmes = mod.readmes
+                    
+                    # ENHANCED: Cập nhật cả mod_id, description VÀ category
+                    if mod.mod_id:
+                        installed.mod_id = mod.mod_id
+                    if mod.description:
+                        installed.description = mod.description
+                    if mod.category:
+                        installed.category = mod.category
+                    
                     exists = True
                     break
             if not exists:
                 self.model.add(mod.name, mod)
 
             self.progress(1.0)
+            
+            # NEW: In thông tin tổng kết về mod đã cài
+            summary_info = []
+            if mod.mod_id:
+                summary_info.append(f"Mod ID: {mod.mod_id}")
+            if mod.category and mod.category != "Miscellaneous":
+                summary_info.append(f"Category: {mod.category}")
+            if mod.description and mod.description not in ["No description available", "No mod ID available"]:
+                summary_info.append("Description: Fetched successfully")
+            
+            if summary_info:
+                self.output(f"✓ Mod info detected: {', '.join(summary_info)}")
+            
             result = True
         except Exception as err:
             self.output(formatUserError(err))
@@ -184,6 +257,7 @@ class Installer:
             if path.exists(data.config.extracted):
                 removeDirectory(data.config.extracted)
         return result, installCount, incompleteCount
+
 
     def uninstallMod(self, mod: Mod) -> bool:
         '''Uninstalls given mod'''
@@ -286,3 +360,67 @@ class Installer:
                                 menu + translate("MainWindow", " will not be removed."))
                 else:
                     remove(data.config.menu + "/" + menu)
+
+    def update_mod_category_from_nexus(self, mod: Mod) -> bool:
+        '''Update category cho mod hiện có từ Nexus Mods'''
+        if not mod.mod_id:
+            self.output(f"⚠ Mod {mod.name} không có mod ID, không thể cập nhật category")
+            return False
+        
+        try:
+            fetcher = ModDescriptionFetcher()
+            
+            def output_callback(message):
+                self.output(f"  {message}")
+            
+            # Lấy category mới từ Nexus
+            _, new_category = fetcher.get_description_and_category(mod.mod_id, output_callback)
+            
+            if new_category and new_category != "Miscellaneous":
+                old_category = mod.category
+                mod.category = new_category
+                self.output(f"✓ Category updated for {mod.name}: {old_category} → {new_category}")
+                return True
+            else:
+                self.output(f"ℹ No category update needed for {mod.name}")
+                return False
+                
+        except Exception as e:
+            self.output(f"⚠ Failed to update category for {mod.name}: {str(e)}")
+            return False
+
+    def batch_update_categories(self) -> Tuple[int, int]:
+        '''Batch update categories cho tất cả mods có mod_id'''
+        self.output("Starting batch category update...")
+        
+        updated_count = 0
+        failed_count = 0
+        
+        mods_with_id = [mod for mod in self.model.all() if mod.mod_id]
+        
+        if not mods_with_id:
+            self.output("ℹ No mods with mod ID found for category update")
+            return 0, 0
+        
+        self.output(f"Found {len(mods_with_id)} mods with mod ID")
+        
+        for i, mod in enumerate(mods_with_id):
+            try:
+                self.progress((i + 1) / len(mods_with_id))
+                self.output(f"Updating category for {mod.name} (ID: {mod.mod_id})...")
+                
+                if self.update_mod_category_from_nexus(mod):
+                    updated_count += 1
+                    
+            except Exception as e:
+                self.output(f"⚠ Error updating {mod.name}: {str(e)}")
+                failed_count += 1
+        
+        self.progress(1.0)
+        
+        # Lưu changes vào model
+        if updated_count > 0:
+            self.model.write()
+        
+        self.output(f"✓ Batch update completed: {updated_count} updated, {failed_count} failed")
+        return updated_count, failed_count

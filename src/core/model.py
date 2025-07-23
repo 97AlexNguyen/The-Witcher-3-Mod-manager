@@ -115,9 +115,22 @@ class Model:
         else:
             mod.enabled = False
         mod.name = str(root.get('name'))
+        
+        # NEW: Thêm category từ XML
+        category = root.get('category')
+        mod.category = str(category) if category else 'General'
+        
+        # NEW: Thêm mod_id và description từ XML - Sử dụng None thay vì 'None'
+        mod_id = root.get('mod_id')
+        mod.mod_id = str(mod_id) if mod_id and mod_id != 'None' else None
+        
+        description = root.get('description') 
+        mod.description = str(description) if description and description != 'None' else None
+        
         prt = str(root.get('priority'))
         if prt != 'Not Set':
             mod.priority = prt
+
         for elem in root.findall('data'):
             mod.files.append(str(elem.text))
         for elem in root.findall('dlc'):
@@ -152,6 +165,7 @@ class Model:
         mod.checkPriority()
         return mod
 
+
     @staticmethod
     def writeModToXml(mod: Mod, root: XML.ElementTree) -> XML.ElementTree:
         elem = XML.SubElement(root.getroot(), 'mod')
@@ -159,6 +173,14 @@ class Model:
         elem.set('enabled', str(mod.enabled))
         elem.set('date', mod.date)
         elem.set('priority', mod.priority)
+        elem.set('category', mod.category)  # NEW: Lưu category vào XML
+        
+        # NEW: Lưu mod_id và description vào XML - Chỉ lưu khi có giá trị
+        if mod.mod_id:
+            elem.set('mod_id', mod.mod_id)
+        if mod.description:
+            elem.set('description', mod.description)
+
         if mod.files:
             for file in mod.files:
                 XML.SubElement(elem, 'data').text = file

@@ -4,6 +4,8 @@
 import sys
 from argparse import ArgumentParser
 from os import environ
+from api.get_category import get_category_map,_cli   # <-- đường dẫn tới file vừa tạo
+import threading     
 
 if __name__ == "__main__":
     try:
@@ -21,7 +23,13 @@ if __name__ == "__main__":
         # correct screen scaling
         if "QT_DEVICE_PIXEL_RATIO" in environ:
             del environ["QT_DEVICE_PIXEL_RATIO"]
+            
         environ["QT_AUTO_SCREEN_SCALE_FACTOR"] = "1"
+
+        try:
+            data.category_map = get_category_map("witcher3")   
+        except Exception as err:
+            print(f"[CategoryMapper] update failed: {err}")
 
         documentsPath: str = ''
         gamePath: str = ''
@@ -105,6 +113,7 @@ if __name__ == "__main__":
         data.config.write_priority().join()
         data.config.write_config().join()
         modModel.write()
+
 
         sys.exit(ret)
 

@@ -49,7 +49,8 @@ def isValidModFolder(modPath: str) -> bool:
 
 
 def fetchModFromDirectory(modPath: str) -> Tuple[Mod, List[str], List[str]]:
-    mod = Mod(path.split(modPath)[1])
+    mod = Mod()  
+    mod.name = path.split(modPath)[1]  
     mod_dirs: List[str] = []
     mod_xmls: List[str] = []
     mod_readmes: List[str] = []

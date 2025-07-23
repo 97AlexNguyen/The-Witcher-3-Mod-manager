@@ -404,3 +404,11 @@ class Configuration:
         except OSError as e:
             print(f'Error checking path {internalPath}: {e}')
             return None
+
+    @property
+    def group_by_category(self):
+        return self.get('SETTINGS', 'groupbycategory', '0') == '1'
+
+    @group_by_category.setter
+    def group_by_category(self, value: bool):
+        self.set('SETTINGS', 'groupbycategory', '1' if value else '0')

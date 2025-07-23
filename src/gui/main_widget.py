@@ -13,6 +13,7 @@ from PySide6.QtWidgets import (
     QHeaderView,
     QInputDialog,
     QLineEdit,
+    QDialog,
     QMenu,
     QMenuBar,
     QMessageBox,
@@ -41,9 +42,11 @@ from src.gui.alerts import (
 from src.gui.details_dialog import DetailsDialog
 from src.gui.themes import get_dark_palette, get_light_palette, get_system_palette
 from src.gui.tree_widget import CustomTreeWidgetItem
+from src.gui.category_dialog import CategoryDialog
 from src.util.syntax import *
 from src.util.util import *
-
+from src.gui.description_widget import DescriptionWidget
+from src.util.mod_description_fetcher import ModDescriptionFetcher
 
 class ModsSettingsWatcher(QThread):
     '''Watches for changes in mods.settings file and signals for UI updates'''
@@ -182,7 +185,7 @@ class CustomMainWidget(QWidget):
         self.treeWidget.setUniformRowHeights(True)
         self.treeWidget.setAnimated(True)
         self.treeWidget.setHeaderHidden(False)
-        self.treeWidget.setColumnCount(8)
+        self.treeWidget.setColumnCount(9)
         self.treeWidget.setObjectName("treeWidget")
         self.treeWidget.header().setCascadingSectionResizes(True)
         self.treeWidget.header().setHighlightSections(False)
@@ -217,14 +220,29 @@ class CustomMainWidget(QWidget):
         self.horizontalLayout_2 = QHBoxLayout()
         self.horizontalLayout_2.setObjectName("horizontalLayout_2")
 
+        # Left side - Output và Description
+        self.leftSideLayout = QVBoxLayout()
+        
         # Output text widget
         self.textEdit = QTextEdit(self.centralwidget)
         self.textEdit.setMaximumSize(QSize(16777215, 16777215))
         self.textEdit.setReadOnly(True)
         self.textEdit.setObjectName("textEdit")
-        self.horizontalLayout_2.addWidget(self.textEdit)
+        self.leftSideLayout.addWidget(self.textEdit)
+        
+        # Description widget với output callback
+        self.descriptionWidget = DescriptionWidget(self)
+        # Kết nối description widget với output callback
+        self.descriptionWidget.set_output_callback(self.output)
+        self.leftSideLayout.addWidget(self.descriptionWidget)
+        
+        # Set stretch cho output và description (50-50 split)
+        self.leftSideLayout.setStretch(0, 1)  # Output
+        self.leftSideLayout.setStretch(1, 1)  # Description
+        
+        self.horizontalLayout_2.addLayout(self.leftSideLayout)
 
-        # Button layout
+        # Right side - Button layout (giữ nguyên)
         self.verticalLayout = QVBoxLayout()
         self.verticalLayout.setObjectName("verticalLayout")
 
@@ -252,9 +270,10 @@ class CustomMainWidget(QWidget):
 
         # Add button layout to horizontal layout
         self.horizontalLayout_2.addLayout(self.verticalLayout)
-        self.horizontalLayout_2.setStretch(0, 3)
-        self.horizontalLayout_2.setStretch(1, 1)
+        self.horizontalLayout_2.setStretch(0, 3)  # Left side (output + description)
+        self.horizontalLayout_2.setStretch(1, 1)  # Right side (buttons)
         self.verticalLayout_2.addLayout(self.horizontalLayout_2)
+
 
     def configureUi(self):
         for i in range(self.treeWidget.header().count()):
@@ -299,6 +318,16 @@ class CustomMainWidget(QWidget):
         self.actionUnsetPriority.triggered.connect(self.unsetPriority)
         self.actionRestoreColumns.triggered.connect(self.restoreColumns)
 
+        self.actionBatchUpdateCategories.triggered.connect(self.batchUpdateCategories)
+        self.actionUpdateCategoryFromNexus.triggered.connect(self.updateCategoryFromNexus)
+
+        self.actionOpenNexusPage.triggered.connect(self.openNexusPage)
+        self.actionFetchDescription.triggered.connect(self.fetchDescription)
+        self.actionRefreshDescription.triggered.connect(self.refreshDescription)
+        
+        # Kết nối selection changed để hiển thị description
+        self.treeWidget.itemSelectionChanged.connect(self.onModSelectionChanged)
+
         self.scriptMergerButton.clicked.connect(self.runScriptMerger)
         self.runGameButton.clicked.connect(self.runTheGame)
 
@@ -319,9 +348,97 @@ class CustomMainWidget(QWidget):
 
         self.searchWidget.textChanged.connect(self.setSearchString)
 
+        self.actionSetCategory.triggered.connect(self.setCategory)
+        self.actionGroupByCategory.triggered.connect(self.toggleGroupByCategory)
+
     def openByConfigKey(self, option):
         '''Open or run any kind of folder/file or executable by configuration key'''
         openFile(getattr(data.config, option))
+
+
+    def openMenu(self, position):
+        '''Right click menu on mod list (Left panel)'''
+        menu = QMenu()
+        menu.addAction(self.actionDetails)
+        menu.addSeparator()
+        menu.addAction(self.actionSetPriority)
+        menu.addAction(self.actionUnsetPriority)
+        menu.addAction(self.actionSetCategory)
+        menu.addSeparator()
+        
+        # NEW: Thêm Nexus Mods actions
+        selected = self.getSelectedMods()
+        if selected and len(selected) == 1:  # Chỉ hiển thị khi chọn 1 mod
+            mod = self.model.get(selected[0])
+            if mod.mod_id:
+                menu.addAction(self.actionOpenNexusPage)
+                menu.addAction(self.actionFetchDescription)
+                menu.addAction(self.actionRefreshDescription)
+                menu.addAction(self.actionUpdateCategoryFromNexus)  # NEW
+                menu.addSeparator()
+        
+        menu.addAction(self.actionOpenFolder)
+        menu.addSeparator()
+        menu.addAction(self.actionRename)
+        menu.addAction(self.actionReinstall_Mods)
+        menu.addAction(self.actionUninstall_Mods)
+        menu.addAction(self.actionEnable_Disable_Mods)
+        menu.exec(self.treeWidget.viewport().mapToGlobal(position))
+
+    # 6. Thêm methods mới để xử lý Nexus Mods:
+    def onModSelectionChanged(self):
+        '''Handle when mod selection changes'''
+        selected = self.getSelectedMods()
+        if selected and len(selected) == 1:
+            mod = self.model.get(selected[0])
+            self.descriptionWidget.display_description(mod, fetch_if_needed=True)
+        else:
+            self.descriptionWidget.clear_description()
+
+    def openNexusPage(self):
+        '''Open Nexus Mods page for selected mod'''
+        try:
+            selected = self.getSelectedMods()
+            if selected and len(selected) == 1:
+                mod = self.model.get(selected[0])
+                if mod.mod_id:
+                    url = f"https://www.nexusmods.com/witcher3/mods/{mod.mod_id}"
+                    openUrl(url)
+                    self.output(f"Opening Nexus page: {url}")
+                else:
+                    self.output("No mod ID available for this mod")
+        except Exception as err:
+            self.output(formatUserError(err))
+
+    def fetchDescription(self):
+        '''Fetch description for selected mod'''
+        try:
+            selected = self.getSelectedMods()
+            if selected and len(selected) == 1:
+                mod = self.model.get(selected[0])
+                if mod.mod_id:
+                    self.output(f"Fetching description for mod: {mod.name} (ID: {mod.mod_id})")
+                    self.descriptionWidget.display_description(mod, fetch_if_needed=True)
+                else:
+                    self.output("No mod ID available for this mod")
+        except Exception as err:
+            self.output(formatUserError(err))
+
+    def refreshDescription(self):
+        '''Force refresh description for selected mod'''
+        try:
+            selected = self.getSelectedMods()
+            if selected and len(selected) == 1:
+                mod = self.model.get(selected[0])
+                if mod.mod_id:
+                    self.output(f"Force refreshing description for: {mod.name} (ID: {mod.mod_id})")
+                    self.descriptionWidget.force_fetch_description(mod)
+                else:
+                    self.output("No mod ID available for this mod")
+        except Exception as err:
+            self.output(formatUserError(err))
+
+
 
     def configureToolbar(self):
         '''Creates and configures toolbar'''
@@ -403,21 +520,6 @@ class CustomMainWidget(QWidget):
         self.actionAddToToolbar.triggered.connect(self.addToToolbar)
         self.actionAddToToolbar.setText(translate("MainWindow", "Add New.."))
 
-    def openMenu(self, position):
-        '''Right click menu on mod list (Left panel)'''
-        menu = QMenu()
-        menu.addAction(self.actionDetails)
-        menu.addSeparator()
-        menu.addAction(self.actionSetPriority)
-        menu.addAction(self.actionUnsetPriority)
-        menu.addSeparator()
-        menu.addAction(self.actionOpenFolder)
-        menu.addSeparator()
-        menu.addAction(self.actionRename)
-        menu.addAction(self.actionReinstall_Mods)
-        menu.addAction(self.actionUninstall_Mods)
-        menu.addAction(self.actionEnable_Disable_Mods)
-        menu.exec(self.treeWidget.viewport().mapToGlobal(position))
 
     def openEditMenu(self, position):
         '''Right click menu on output'''
@@ -953,51 +1055,77 @@ class CustomMainWidget(QWidget):
 
     @throttle(200)
     def refreshList(self):
-        '''Refreshes mod list'''
+        '''Refreshes mod list - UPDATED with category support'''
         try:
             selected = self.getSelectedMods()
             self.treeWidget.clear()
-            moddata = []
-            for mod in self.model.all():
-                if len(self.searchString) > 0:
-                    if self.searchString.lower() not in mod.name.lower():
-                        continue
-                moddata += mod.files
-                modsize = 0
-                for modfile in mod.files:
-                    modsize += getSize(data.config.mods + "/" + modfile)
-                    modsize += getSize(data.config.mods + "/~" + modfile)
-                for dlcfile in mod.dlcs:
-                    modsize += getSize(data.config.dlc + "/" + dlcfile)
-                    modsize += getSize(data.config.dlc + "/~" + dlcfile)
-                userstr = translate("MainWindow", "No")
-                if mod.usersettings:
-                    userstr = translate("MainWindow", "Yes")
-                self.addToList(
-                    mod.enabled,
-                    mod.name,
-                    mod.priority,
-                    len(mod.files),
-                    len(mod.dlcs),
-                    len(mod.menus),
-                    len(mod.xmlkeys),
-                    len(mod.hidden),
-                    len(mod.inputsettings),
-                    userstr,
-                    modsize,
-                    mod.date,
-                )
+            
+            # Group mods by category if enabled
+            if self.actionGroupByCategory.isChecked():
+                categories = {}
+                for mod in self.model.all():
+                    if len(self.searchString) > 0:
+                        if self.searchString.lower() not in mod.name.lower():
+                            continue
+                    
+                    category = mod.category or 'General'
+                    if category not in categories:
+                        categories[category] = []
+                    categories[category].append(mod)
+                
+                # Add mods grouped by category
+                for category, mods in sorted(categories.items()):
+                    for mod in mods:
+                        modsize = self.calculateModSize(mod)
+                        userstr = translate("MainWindow", "Yes") if mod.usersettings else translate("MainWindow", "No")
+                        
+                        self.addToList(
+                            mod.enabled, mod.name, mod.priority,
+                            len(mod.files), len(mod.dlcs), len(mod.menus),
+                            len(mod.xmlkeys), len(mod.hidden), len(mod.inputsettings),
+                            userstr, modsize, mod.date, mod.category
+                        )
+            else:
+                # Normal list without grouping
+                for mod in self.model.all():
+                    if len(self.searchString) > 0:
+                        if self.searchString.lower() not in mod.name.lower():
+                            continue
+                    
+                    modsize = self.calculateModSize(mod)
+                    userstr = translate("MainWindow", "Yes") if mod.usersettings else translate("MainWindow", "No")
+                    
+                    self.addToList(
+                        mod.enabled, mod.name, mod.priority,
+                        len(mod.files), len(mod.dlcs), len(mod.menus),
+                        len(mod.xmlkeys), len(mod.hidden), len(mod.inputsettings),
+                        userstr, modsize, mod.date, mod.category
+                    )
+            
+            # Restore selection
             for item in selected:
                 rows = self.treeWidget.findItems(item, Qt.MatchEndsWith, 1)
                 if rows:
                     for row in rows:
                         row.setSelected(True)
+            
             self.refreshLoadOrder()
             self.model.write()
         except Exception as err:
             self.output(translate("MainWindow", "Couldn't refresh list: ") + f"{formatUserError(err)}")
             return err
         return None
+
+    def calculateModSize(self, mod):
+        '''Calculate total size of mod files'''
+        modsize = 0
+        for modfile in mod.files:
+            modsize += getSize(data.config.mods + "/" + modfile)
+            modsize += getSize(data.config.mods + "/~" + modfile)
+        for dlcfile in mod.dlcs:
+            modsize += getSize(data.config.dlc + "/" + dlcfile)
+            modsize += getSize(data.config.dlc + "/~" + dlcfile)
+        return modsize
 
     @debounce(100)
     def refreshLoadOrder(self):
@@ -1042,22 +1170,33 @@ class CustomMainWidget(QWidget):
         '''Sets the progress to currentProgress'''
         self.progressBar.setProperty("value", currentProgress)
 
-    def addToList(
-        self,
-        on,
-        name,
-        prio,
-        data_,
-        dlc,
-        menu,
-        keys,
-        hidden,
-        inputkeys,
-        settings,
-        size,
-        date,
-    ):
-        '''Adds mod data to the list'''
+    def setCategory(self):
+        '''Sets the category of the selected mods'''
+        try:
+            selected = self.getSelectedMods()
+            if selected:
+                current_category = self.model.get(selected[0]).category
+                dialog = CategoryDialog(self, current_category)
+                
+                if dialog.exec() == QDialog.Accepted:
+                    new_category = dialog.get_category()
+                    if new_category:
+                        for modname in selected:
+                            mod = self.model.get(modname)
+                            mod.category = new_category
+                        self.model.write()
+                        self.refreshList()
+                        self.output(f"Set category '{new_category}' for {len(selected)} mod(s)")
+        except Exception as err:
+            self.output(formatUserError(err))
+    
+    def toggleGroupByCategory(self):
+        '''Toggle grouping mods by category'''
+        self.refreshList()
+
+
+    def addToList(self, on, name, prio, data_, dlc, menu, keys, hidden, inputkeys, settings, size, date, category='General'):
+        '''Adds mod data to the list - UPDATED to include category'''
         if data_ == 0:
             datastr = "-"
         else:
@@ -1088,9 +1227,11 @@ class CustomMainWidget(QWidget):
         else:
             size /= 1024
             sizestr = f"{size:.1f}" + "MB"
+        
         proplist = [
             "",
             str(name),
+            str(category),  # NEW: Thêm category column
             str(prio),
             datastr,
             dlcstr,
@@ -1103,8 +1244,8 @@ class CustomMainWidget(QWidget):
             str(date),
         ]
         item = CustomTreeWidgetItem(proplist)
-        item.setTextAlignment(2, Qt.AlignCenter)
-        item.setTextAlignment(3, Qt.AlignCenter)
+        item.setTextAlignment(2, Qt.AlignCenter)  # Category alignment
+        item.setTextAlignment(3, Qt.AlignCenter)  # Priority alignment (shifted)
         item.setTextAlignment(4, Qt.AlignCenter)
         item.setTextAlignment(5, Qt.AlignCenter)
         item.setTextAlignment(6, Qt.AlignCenter)
@@ -1118,8 +1259,34 @@ class CustomMainWidget(QWidget):
                 item.setCheckState(0, Qt.Checked)
             else:
                 item.setCheckState(0, Qt.Unchecked)
-        self.treeWidget.addTopLevelItem(item)
+        
+        if self.actionGroupByCategory.isChecked():
+            self.addToGroupedList(item, category)
+        else:
+            self.treeWidget.addTopLevelItem(item)
+        
         return item
+
+    def addToGroupedList(self, item, category):
+        '''Add item to category group'''
+        # Tìm hoặc tạo category group
+        category_item = None
+        for i in range(self.treeWidget.topLevelItemCount()):
+            top_item = self.treeWidget.topLevelItem(i)
+            if top_item.text(1) == f"[{category}]":
+                category_item = top_item
+                break
+        
+        if not category_item:
+            # Tạo category group mới
+            category_item = CustomTreeWidgetItem([
+                "", f"[{category}]", "", "", "", "", "", "", "", "", "", "", ""
+            ])
+            category_item.setExpanded(True)
+            self.treeWidget.addTopLevelItem(category_item)
+        
+        category_item.addChild(item)
+    
 
     def getSelectedMods(self):
         '''Returns list of mod names of the selected mods'''
@@ -1195,6 +1362,14 @@ class CustomMainWidget(QWidget):
         self.actionRestoreColumns.setIconVisibleInMenu(False)
         self.actionRestoreColumns.setObjectName("actionRestoreColumns")
 
+        self.actionSetCategory = QAction(self.mainWindow)
+        self.actionSetCategory.setObjectName("actionSetCategory")
+        
+        # NEW: Thêm action để group by category
+        self.actionGroupByCategory = QAction(self.mainWindow)
+        self.actionGroupByCategory.setCheckable(True)
+        self.actionGroupByCategory.setObjectName("actionGroupByCategory")
+
         self.actionUninstall_Mods = QAction(self.mainWindow)
         self.actionUninstall_Mods.setIcon(getIcon("rem.ico"))
         self.actionUninstall_Mods.setIconVisibleInMenu(False)
@@ -1206,6 +1381,21 @@ class CustomMainWidget(QWidget):
         self.actionEnable_Disable_Mods.setIconVisibleInMenu(False)
         self.actionEnable_Disable_Mods.setObjectName("actionEnable_Disable_Mods")
         self.actionEnable_Disable_Mods.setIconText(translate("MainWindow", "Toggle"))
+
+        self.actionBatchUpdateCategories = QAction(self.mainWindow)
+        self.actionBatchUpdateCategories.setObjectName("actionBatchUpdateCategories")
+        
+        self.actionUpdateCategoryFromNexus = QAction(self.mainWindow)
+        self.actionUpdateCategoryFromNexus.setObjectName("actionUpdateCategoryFromNexus")
+
+        self.actionOpenNexusPage = QAction(self.mainWindow)
+        self.actionOpenNexusPage.setObjectName("actionOpenNexusPage")
+        
+        self.actionFetchDescription = QAction(self.mainWindow)
+        self.actionFetchDescription.setObjectName("actionFetchDescription")
+        
+        self.actionRefreshDescription = QAction(self.mainWindow)
+        self.actionRefreshDescription.setObjectName("actionRefreshDescription")
 
         self.actionReinstall_Mods = QAction(self.mainWindow)
         self.actionReinstall_Mods.setObjectName("actionReinstall_Mods")
@@ -1332,6 +1522,75 @@ class CustomMainWidget(QWidget):
         self.menubar.addAction(self.menuSettings.menuAction())
         self.menubar.addAction(self.menuHelp.menuAction())
 
+
+
+    def updateCategoryFromNexus(self):
+        '''Update category for selected mod từ Nexus Mods'''
+        try:
+            selected = self.getSelectedMods()
+            if selected and len(selected) == 1:
+                mod = self.model.get(selected[0])
+                if mod.mod_id:
+                    self.output(f"Updating category for mod: {mod.name} (ID: {mod.mod_id})")
+                    installer = Installer(self.model, output=self.output)
+                    
+                    success = installer.update_mod_category_from_nexus(mod)
+                    if success:
+                        self.model.write()
+                        self.refreshList()
+                        self.output("✓ Category update completed")
+                    else:
+                        self.output("ℹ No category update performed")
+                else:
+                    self.output("No mod ID available for this mod")
+            else:
+                self.output("Please select exactly one mod")
+        except Exception as err:
+            self.output(formatUserError(err))
+
+    def batchUpdateCategories(self):
+        '''Batch update categories cho tất cả mods có mod_id'''
+        try:
+            mods_with_id = [mod for mod in self.model.all() if mod.mod_id]
+            
+            if not mods_with_id:
+                self.output("No mods with mod ID found for category update")
+                return
+            
+            clicked = QMessageBox.question(
+                self,
+                translate("MainWindow", "Batch Update Categories"),
+                translate("MainWindow", "Update categories for ") + 
+                str(len(mods_with_id)) + 
+                translate("MainWindow", " mods with mod ID from Nexus Mods?") + "\n\n" +
+                translate("MainWindow", "This may take several minutes and will respect rate limits."),
+                QMessageBox.Yes | QMessageBox.No,
+                QMessageBox.Yes,
+            )
+            
+            if clicked == QMessageBox.Yes:
+                self.clear()  # Clear output
+                installer = Installer(self.model, output=self.output)
+                installer.progress = self.setProgress
+                
+                updated, failed = installer.batch_update_categories()
+                
+                self.refreshList()
+                self.setProgress(0)
+                
+                if updated > 0:
+                    self.output(f"✓ Successfully updated {updated} mod categories")
+                if failed > 0:
+                    self.output(f"⚠ Failed to update {failed} mod categories")
+                    
+        except Exception as err:
+            self.setProgress(0)
+            self.output(formatUserError(err))
+
+
+
+
+
     def populateMenu(self):
         '''Populate the menu and submenus'''
 
@@ -1368,7 +1627,26 @@ class CustomMainWidget(QWidget):
         self.menuHelp.addAction(self.actionMain_Web_Page)
         self.menuHelp.addAction(self.actionGitHub)
 
+        self.menuView = QMenu(self.menubar)
+        self.menuView.setObjectName("menuView")
+        self.menuView.setTitle(translate("MainWindow", "View"))
+        self.menubar.insertAction(self.menuSettings.menuAction(), self.menuView.menuAction())
+        
+        self.menuView.addAction(self.actionGroupByCategory)
+        self.menuView.addSeparator()
+        self.menuView.addAction(self.actionRestoreColumns)
+
         # --- Build Settings submenus ---
+
+        self.menuTools = QMenu(self.menubar)
+        self.menuTools.setObjectName("menuTools")
+        self.menuTools.setTitle(translate("MainWindow", "Tools"))
+        self.menubar.insertAction(self.menuHelp.menuAction(), self.menuTools.menuAction())
+        
+        self.menuTools.addAction(self.actionBatchUpdateCategories)
+        self.menuTools.addSeparator()
+        self.menuTools.addAction(self.actionRun_Script_Merger)
+        self.menuTools.addAction(self.actionRun_The_Game)
 
         # Configure Settings submenu
         self.menuConfigure_Settings.addAction(self.actionChange_Game_Path)
@@ -1389,19 +1667,39 @@ class CustomMainWidget(QWidget):
 
         self.treeWidget.headerItem().setText(0, translate("MainWindow", "Enabled"))
         self.treeWidget.headerItem().setText(1, translate("MainWindow", "Mod Name"))
-        self.treeWidget.headerItem().setText(2, translate("MainWindow", "Priority"))
-        self.treeWidget.headerItem().setText(3, translate("MainWindow", "Data"))
-        self.treeWidget.headerItem().setText(4, translate("MainWindow", "DLC"))
-        self.treeWidget.headerItem().setText(5, translate("MainWindow", "Menu"))
-        self.treeWidget.headerItem().setText(6, translate("MainWindow", "Var"))
-        self.treeWidget.headerItem().setText(7, translate("MainWindow", "Hidden"))
-        self.treeWidget.headerItem().setText(8, translate("MainWindow", "Key"))
-        self.treeWidget.headerItem().setText(9, translate("MainWindow", "Settings"))
-        self.treeWidget.headerItem().setText(10, translate("MainWindow", "Size"))
-        self.treeWidget.headerItem().setText(11, translate("MainWindow", "Date Installed"))
+        self.treeWidget.headerItem().setText(2, translate("MainWindow", "Category"))
+        self.treeWidget.headerItem().setText(3, translate("MainWindow", "Priority"))
+        self.treeWidget.headerItem().setText(4, translate("MainWindow", "Data"))
+        self.treeWidget.headerItem().setText(5, translate("MainWindow", "DLC"))
+        self.treeWidget.headerItem().setText(6, translate("MainWindow", "Menu"))
+        self.treeWidget.headerItem().setText(7, translate("MainWindow", "Var"))
+        self.treeWidget.headerItem().setText(8, translate("MainWindow", "Hidden"))
+        self.treeWidget.headerItem().setText(9, translate("MainWindow", "Key"))
+        self.treeWidget.headerItem().setText(10, translate("MainWindow", "Settings"))
+        self.treeWidget.headerItem().setText(11, translate("MainWindow", "Size"))
+        self.treeWidget.headerItem().setText(12, translate("MainWindow", "Date Installed"))
+
+        self.actionBatchUpdateCategories.setText(translate("MainWindow", "Batch Update Categories"))
+        self.actionBatchUpdateCategories.setToolTip(translate("MainWindow", "Update categories for all mods with mod ID from Nexus Mods"))
+        
+        self.actionUpdateCategoryFromNexus.setText(translate("MainWindow", "Update Category from Nexus"))
+        self.actionUpdateCategoryFromNexus.setToolTip(translate("MainWindow", "Update category for this mod from Nexus Mods"))
+
+        self.actionOpenNexusPage.setText(translate("MainWindow", "Open Nexus Page"))
+        self.actionOpenNexusPage.setToolTip(translate("MainWindow", "Open this mod's page on Nexus Mods"))
+        
+        self.actionFetchDescription.setText(translate("MainWindow", "Fetch Description"))
+        self.actionFetchDescription.setToolTip(translate("MainWindow", "Fetch mod description from Nexus Mods"))
+        
+        self.actionRefreshDescription.setText(translate("MainWindow", "Refresh Description"))
+        self.actionRefreshDescription.setToolTip(translate("MainWindow", "Force refresh mod description from Nexus Mods"))
 
         self.loadOrder.headerItem().setText(0, translate("MainWindow", "Load Order"))
         self.loadOrder.headerItem().setText(1, translate("MainWindow", "Priority"))
+
+        self.actionSetCategory.setText(translate("MainWindow", "Set Category"))
+        self.actionSetCategory.setShortcut("Ctrl+T")
+        self.actionGroupByCategory.setText(translate("MainWindow", "Group by Category"))
 
         self.textEdit.setPlaceholderText(translate("MainWindow", "Output"))
         self.textEdit.setCursor(QCursor(Qt.ArrowCursor))
