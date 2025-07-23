@@ -11,8 +11,11 @@ from src.globals import data
 from src.globals.constants import translate
 from src.gui.alerts import MessageRebindKeys
 from src.util.util import *
+import yaml
 
+import pathlib
 
+    
 class Mod:
     '''Mod object containing all mod data'''
 
@@ -82,40 +85,24 @@ class Mod:
     @staticmethod
     def get_predefined_categories() -> List[str]:
         '''Returns a list of predefined categories for mods of the Witcher 3'''
-        return [
-            'General',
-            'Alchemy and Crafting',
-            'Armor and Clothing',
-            'Audio and Music',
-            'Balancing and Gameplay',
-            'Bug Fixes',
-            'Camera and Controls',
-            'Characters and NPCs',
-            'Cheats and God items',
-            'Combat',
-            'Controller buttons Layout',
-            'Debug Console',
-            'Gameplay Changes',
-            'Gwent',
-            'Hair and Face',
-            'Immersion',
-            'Inventory',
-            'Items',
-            'Miscellaneous',
-            'Modders Resources',
-            'Models and Textures',
-            'Overhauls',
-            'Performance',
-            'Quests and Adventures',
-            'Signs',
-            'Skills and Leveling',
-            'Tweaks',
-            'Utilities',
-            'Visuals and Graphics',
-            'Weapons',
-            'Weather and Armor'
-        ]
+        try:
+            # Lùi 2 cấp từ file hiện tại để tìm project root
+            root_dir = pathlib.Path(__file__).resolve().parents[2]
+            yaml_path = root_dir / "mapping" / "category_mapping.yaml"
 
+            if not yaml_path.exists():
+                return ['General']  # fallback nếu chưa có YAML
+
+            with yaml_path.open("r", encoding="utf-8") as f:
+                data = yaml.safe_load(f)
+
+            category_dict = data.get("Category_Mapping", {})
+            sorted_names = [category_dict[k] for k in sorted(category_dict, key=lambda x: int(x))]
+            return sorted_names or ['General']
+        except Exception as e:
+            print(f"[Mod.get_predefined_categories] Failed: {e}")
+            return ['General']
+        
     @property
     def name(self) -> str:
         return self._name

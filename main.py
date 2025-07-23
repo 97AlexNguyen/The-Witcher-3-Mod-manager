@@ -1,14 +1,46 @@
 '''Witcher 3 Mod Manager main module'''
-# pylint: disable=invalid-name,missing-docstring,bare-except,broad-except,wildcard-import,unused-wildcard-import
-
 import sys
 from argparse import ArgumentParser
 from os import environ
-from api.get_category import get_category_map,_cli   # <-- đường dẫn tới file vừa tạo
-import threading     
+
+from api.get_category import CategoryUpdater
+import threading
+
+# Trong phần __main__, thêm trước khi khởi tạo GUI:
+def init_category_updater():
+    """Initialize category updater in background"""
+    try:
+        updater = CategoryUpdater("witcher3")
+        
+        # Check if update needed and run in background
+        def background_update():
+            try:
+                print("[CategoryUpdater] Checking for category updates...")
+                success = updater.update_categories()
+                if success:
+                    print("[CategoryUpdater] Categories updated successfully")
+                else:
+                    print("[CategoryUpdater] Category update failed")
+            except Exception as e:
+                print(f"[CategoryUpdater] Error: {e}")
+        
+        # Run in separate thread to not block GUI startup
+        update_thread = threading.Thread(target=background_update, daemon=True)
+        update_thread.start()
+        
+    except Exception as e:
+        print(f"[CategoryUpdater] Failed to initialize: {e}")
+
 
 if __name__ == "__main__":
     try:
+        init_category_updater()
+    except Exception as e:
+        print(f"[CategoryUpdater] Initialization error: {e}")
+        pass
+    try:
+
+        
         from PySide6.QtWidgets import QApplication, QMessageBox
 
         from src.configuration.config import Configuration
@@ -26,10 +58,6 @@ if __name__ == "__main__":
             
         environ["QT_AUTO_SCREEN_SCALE_FACTOR"] = "1"
 
-        try:
-            data.category_map = get_category_map("witcher3")   
-        except Exception as err:
-            print(f"[CategoryMapper] update failed: {err}")
 
         documentsPath: str = ''
         gamePath: str = ''
