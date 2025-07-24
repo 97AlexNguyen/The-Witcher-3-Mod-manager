@@ -11,6 +11,13 @@ The-Witcher-3-Mod-manager
 │   └── setup_api.py
 ├── build
 │   └── exe.win-amd64-3.12
+│       ├── api
+│       │   ├── get_category
+│       │   │   └── witcher3_categories.json
+│       │   ├── api_key.txt
+│       │   ├── get_category.py
+│       │   ├── nexus_api.py
+│       │   └── setup_api.py
 │       ├── lib
 │       │   ├── api
 │       │   ├── asyncio
@@ -76,7 +83,6 @@ The-Witcher-3-Mod-manager
 │       │   │       └── Lorem ipsum.txt
 │       │   ├── json
 │       │   ├── logging
-│       │   ├── logs
 │       │   ├── lxml
 │       │   │   ├── html
 │       │   │   │   ├── _difflib.cp312-win_amd64.pyd
@@ -231,9 +237,6 @@ The-Witcher-3-Mod-manager
 │       │   │   ├── xpath.pxi
 │       │   │   ├── xslt.pxi
 │       │   │   └── xsltext.pxi
-│       │   ├── mapping
-│       │   │   ├── category_mapping.yaml
-│       │   │   └── update_status.json
 │       │   ├── more_itertools
 │       │   │   ├── __init__.pyi
 │       │   │   ├── more.pyi
@@ -1061,6 +1064,10 @@ The-Witcher-3-Mod-manager
 │       │   ├── unicodedata.pyd
 │       │   ├── win32api.pyd
 │       │   └── win32evtlog.pyd
+│       ├── logs
+│       ├── mapping
+│       │   ├── category_mapping.yaml
+│       │   └── update_status.json
 │       ├── res
 │       │   ├── Add.ico
 │       │   ├── check.ico
@@ -1788,6 +1795,7 @@ The-Witcher-3-Mod-manager
 │   ├── util
 │   │   ├── __init__.py
 │   │   ├── mod_description_fetcher.py
+│   │   ├── resource_utils.py
 │   │   ├── syntax.py
 │   │   ├── text_sanitize.py
 │   │   └── util.py
@@ -1817,6 +1825,10 @@ The-Witcher-3-Mod-manager
 ├── Readme.md
 ├── setup.cfg
 ├── setup.py
+├── TheWitcher3ModManager.spec
+├── tools_data.json
 ├── ts.pro
 ├── ts.py
+├── tw3mm.spec
+├── version_info.txt
 └── witcher mod manager.png

@@ -5,8 +5,18 @@ from cx_Freeze import Executable, setup
 
 from src.globals.constants import *
 
-FILES = ["res/", "translations/", "tools/",
-         ("res/qt.conf", "qt.conf"), "LICENSE"]
+# UPDATED: Include all necessary folders and files
+FILES = [
+    "res/",           # Resources (icons, etc.)
+    "translations/",  # Language files
+    "tools/",         # 7zip tools
+    "mapping/",       # ✅ Category mapping files - NEEDED for categories
+    "api/",           # ✅ API scripts and config - NEEDED for Nexus integration
+    "logs/",          # ✅ Log directory (may be empty but structure needed)
+    ("res/qt.conf", "qt.conf"),  # Qt configuration
+    "LICENSE"
+]
+
 SHORTCUT_TABLE = [
     (
         "DesktopShortcut",        # Shortcut
@@ -30,7 +40,7 @@ BDIST_MSI_OPTIONS = {'data': MSI_DATA}
 setup(
     name=TITLE,
     version=VERSION,
-    url=URL_GIT_CLONE,
+    url=URL_WEB,  # Fixed: should be URL_WEB not URL_GIT_CLONE
     license='Open-source',
     options={
         "build_exe": {
@@ -40,7 +50,8 @@ setup(
             "zip_include_packages": ["src"],
             "include_msvcr": True
         },
-        "bdist_msi": BDIST_MSI_OPTIONS},
+        "bdist_msi": BDIST_MSI_OPTIONS
+    },
     author=AUTHORS[1],
     author_email=AUTHORS_MAIL[1],
     description=TITLE,

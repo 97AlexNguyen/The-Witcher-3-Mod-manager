@@ -2022,6 +2022,8 @@ class CustomMainWidget(QWidget):
         self.actionSetCategory.setText(translate("MainWindow", "Set Category"))
         self.actionSetCategory.setShortcut("Ctrl+T")
         self.actionGroupByCategory.setText(translate("MainWindow", "Group by Category"))
+        self.actionGroupByCategory.setShortcut("G")
+
 
         self.textEdit.setPlaceholderText(translate("MainWindow", "Output"))
         self.textEdit.setCursor(QCursor(Qt.ArrowCursor))

@@ -5,11 +5,11 @@ from PySide6.QtWidgets import (
 )
 
 from src.globals.constants import translate
-from src.domain.mod import Mod
+from src.util.resource_utils import load_category_mapping
 
 
 class CategoryDialog(QDialog):
-    '''Dialog for setting mod category'''
+    '''Dialog for setting mod category with resource-aware category loading'''
 
     def __init__(self, parent, current_category='General'):
         super().__init__(parent)
@@ -26,7 +26,18 @@ class CategoryDialog(QDialog):
         
         self.category_combo = QComboBox()
         self.category_combo.setEditable(True)
-        self.category_combo.addItems(Mod.get_predefined_categories())
+        
+        # UPDATED: Load categories using standardized method
+        try:
+            from src.util.resource_utils import get_predefined_categories_list
+            categories = get_predefined_categories_list()
+            self.category_combo.addItems(categories)
+            print(f"[CategoryDialog] Loaded {len(categories)} categories")
+        except Exception as e:
+            print(f"[CategoryDialog] Failed to load categories: {e}")
+            # Fallback categories
+            self.category_combo.addItems(['General', 'Miscellaneous', 'Visuals and Graphics', 'Combat', 'Gameplay Changes'])
+        
         self.category_combo.setCurrentText(current_category)
         category_layout.addWidget(self.category_combo)
         

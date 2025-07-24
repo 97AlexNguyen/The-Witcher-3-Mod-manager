@@ -82,27 +82,22 @@ class Mod:
             return self.description
         
         return "No description available"
+
     @staticmethod
     def get_predefined_categories() -> List[str]:
         '''Returns a list of predefined categories for mods of the Witcher 3'''
         try:
-            # Lùi 2 cấp từ file hiện tại để tìm project root
-            root_dir = pathlib.Path(__file__).resolve().parents[2]
-            yaml_path = root_dir / "mapping" / "category_mapping.yaml"
-
-            if not yaml_path.exists():
-                return ['General']  # fallback nếu chưa có YAML
-
-            with yaml_path.open("r", encoding="utf-8") as f:
-                data = yaml.safe_load(f)
-
-            category_dict = data.get("Category_Mapping", {})
+            from src.util.resource_utils import load_category_mapping
+            
+            category_dict = load_category_mapping()
             sorted_names = [category_dict[k] for k in sorted(category_dict, key=lambda x: int(x))]
+            
             return sorted_names or ['General']
+            
         except Exception as e:
             print(f"[Mod.get_predefined_categories] Failed: {e}")
             return ['General']
-        
+    
     @property
     def name(self) -> str:
         return self._name

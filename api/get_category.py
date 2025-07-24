@@ -3,6 +3,7 @@
 category_auto_updater.py
 ------------------------
 Auto-update module for Nexus Mods category mapping with scheduled updates.
+UPDATED: Compatible with both development and executable environments.
 
 Features:
 =========
@@ -12,6 +13,7 @@ Features:
 * Supports multiple games
 * Graceful failure handling with fallback data
 * Cross-platform scheduling support
+* Compatible with exe builds
 
 Usage:
 ======
@@ -39,7 +41,7 @@ import sys
 import time
 import threading
 import schedule
-from typing import Dict, Optional,OrderedDict
+from typing import Dict, Optional, OrderedDict
 
 try:
     import yaml
@@ -54,8 +56,49 @@ def sorted_category_mapping(mapping: Dict[int, str]) -> Dict[str, str]:
     """
     return {str(k): mapping[k] for k in sorted(mapping, key=int)}
 
-
-
+def get_resource_paths():
+    """Get resource paths that work in both development and executable environments."""
+    
+    # Determine base directory based on execution environment
+    if getattr(sys, 'frozen', False):
+        # Running from executable
+        if hasattr(sys, '_MEIPASS'):
+            # PyInstaller
+            base_dir = pathlib.Path(sys._MEIPASS)
+        else:
+            # cx_Freeze - resources are in lib folder or next to exe
+            exe_dir = pathlib.Path(sys.executable).parent
+            # Try lib folder first, then exe directory
+            if (exe_dir / "lib" / "mapping").exists():
+                base_dir = exe_dir / "lib"
+            else:
+                base_dir = exe_dir
+    else:
+        # Running from script - go up 1 level from api/get_category.py to project root
+        base_dir = pathlib.Path(__file__).resolve().parents[1]
+    
+    # Define paths
+    mapping_dir = base_dir / "mapping"
+    yaml_path = mapping_dir / "category_mapping.yaml"
+    
+    # For logs, always use a writable location
+    if getattr(sys, 'frozen', False):
+        # For exe, use a folder next to exe or user data folder
+        log_dir = pathlib.Path(sys.executable).parent / "logs"
+    else:
+        log_dir = base_dir / "logs"
+    
+    log_file = log_dir / "category_updater.log"
+    status_file = mapping_dir / "update_status.json"
+    
+    return {
+        'base_dir': base_dir,
+        'mapping_dir': mapping_dir,
+        'yaml_path': yaml_path,
+        'log_dir': log_dir,
+        'log_file': log_file,
+        'status_file': status_file
+    }
 
 # ---------------------------------------------------------------------------
 # Configuration
@@ -66,43 +109,57 @@ UPDATE_HOUR = 2  # Cập nhật lúc 2 giờ sáng mỗi ngày
 MAX_RETRIES = 3
 RETRY_DELAY = 300  # 5 phút
 
-# Paths
-ROOT_DIR = pathlib.Path(__file__).resolve().parents[1]
-MAPPING_DIR = ROOT_DIR / "mapping"
-YAML_PATH = MAPPING_DIR / "category_mapping.yaml"
-LOG_DIR = ROOT_DIR / "logs"
-LOG_FILE = LOG_DIR / "category_updater.log"
-STATUS_FILE = MAPPING_DIR / "update_status.json"
+# Get paths using resource-aware function
+PATHS = get_resource_paths()
+ROOT_DIR = PATHS['base_dir']
+MAPPING_DIR = PATHS['mapping_dir']
+YAML_PATH = PATHS['yaml_path']
+LOG_DIR = PATHS['log_dir']
+LOG_FILE = PATHS['log_file']
+STATUS_FILE = PATHS['status_file']
 
 # ---------------------------------------------------------------------------
 # Logging setup
 # ---------------------------------------------------------------------------
 def setup_logging() -> logging.Logger:
     """Setup logging configuration."""
-    LOG_DIR.mkdir(exist_ok=True)
+    try:
+        LOG_DIR.mkdir(exist_ok=True, parents=True)
+    except PermissionError:
+        # If can't create in intended location, use temp dir
+        import tempfile
+        global LOG_FILE
+        LOG_FILE = pathlib.Path(tempfile.gettempdir()) / "tw3mm_category_updater.log"
+        print(f"Using fallback log location: {LOG_FILE}")
     
     logger = logging.getLogger("category_updater")
     logger.setLevel(logging.INFO)
     
     # File handler với rotation
-    from logging.handlers import RotatingFileHandler
-    file_handler = RotatingFileHandler(
-        LOG_FILE, maxBytes=1024*1024, backupCount=5, encoding='utf-8'
-    )
-    file_handler.setLevel(logging.INFO)
+    try:
+        from logging.handlers import RotatingFileHandler
+        file_handler = RotatingFileHandler(
+            LOG_FILE, maxBytes=1024*1024, backupCount=5, encoding='utf-8'
+        )
+        file_handler.setLevel(logging.INFO)
+        
+        # Formatter
+        formatter = logging.Formatter(
+            '%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+        )
+        file_handler.setFormatter(formatter)
+        logger.addHandler(file_handler)
+    except Exception as e:
+        print(f"Could not setup file logging: {e}")
     
     # Console handler
     console_handler = logging.StreamHandler()
     console_handler.setLevel(logging.INFO)
     
-    # Formatter
     formatter = logging.Formatter(
         '%(asctime)s - %(name)s - %(levelname)s - %(message)s'
     )
-    file_handler.setFormatter(formatter)
     console_handler.setFormatter(formatter)
-    
-    logger.addHandler(file_handler)
     logger.addHandler(console_handler)
     
     return logger
@@ -113,11 +170,16 @@ logger = setup_logging()
 # Core updater class
 # ---------------------------------------------------------------------------
 class CategoryUpdater:
-    """Main category updater class."""
+    """Main category updater class with resource-aware paths."""
     
     def __init__(self, game: str = DEFAULT_GAME):
         self.game = game
         self.status = self._load_status()
+        
+        # Log the paths being used
+        logger.info(f"Using mapping directory: {MAPPING_DIR}")
+        logger.info(f"Using YAML path: {YAML_PATH}")
+        logger.info(f"Running from executable: {getattr(sys, 'frozen', False)}")
         
     def _get_api_key(self) -> Optional[str]:
         """Get API key from environment or file."""
@@ -126,13 +188,22 @@ class CategoryUpdater:
         if key:
             return key.strip()
         
-        # Try file
-        key_file = pathlib.Path(__file__).parent / "api_key.txt"
-        if key_file.exists():
-            try:
-                return key_file.read_text(encoding="utf-8").strip()
-            except Exception as e:
-                logger.warning(f"Could not read API key file: {e}")
+        # Try file in multiple locations
+        possible_key_files = [
+            pathlib.Path(__file__).parent / "api_key.txt",  # api/api_key.txt (development)
+            ROOT_DIR / "api" / "api_key.txt",  # project_root/api/api_key.txt
+            pathlib.Path(sys.executable).parent / "api_key.txt",  # next to exe
+        ]
+        
+        for key_file in possible_key_files:
+            if key_file.exists():
+                try:
+                    api_key = key_file.read_text(encoding="utf-8").strip()
+                    if api_key:
+                        logger.info(f"Found API key in: {key_file}")
+                        return api_key
+                except Exception as e:
+                    logger.warning(f"Could not read API key file {key_file}: {e}")
         
         return None
     
@@ -167,7 +238,7 @@ class CategoryUpdater:
         self.status["last_update"] = now
         
         try:
-            MAPPING_DIR.mkdir(exist_ok=True)
+            MAPPING_DIR.mkdir(exist_ok=True, parents=True)
             with open(STATUS_FILE, 'w', encoding='utf-8') as f:
                 json.dump(self.status, f, indent=2, ensure_ascii=False)
         except Exception as e:
@@ -177,7 +248,7 @@ class CategoryUpdater:
         """Fetch categories from Nexus API."""
         api_key = self._get_api_key()
         if not api_key:
-            logger.warning("No API key found. Set NEXUS_API_KEY or create api/api_key.txt")
+            logger.warning("No API key found. Set NEXUS_API_KEY or create api_key.txt file")
             return None
         
         url = f"https://api.nexusmods.com/v1/games/{self.game}.json"
@@ -225,12 +296,16 @@ class CategoryUpdater:
                 "Category_Mapping": sorted_category_mapping(mapping)
             }
 
-            # Backup
+            # Backup existing file
             if YAML_PATH.exists():
                 backup = YAML_PATH.with_suffix(".yaml.backup")
-                YAML_PATH.rename(backup)
-                logger.info("Backup written ➜ %s", backup)
+                try:
+                    YAML_PATH.rename(backup)
+                    logger.info("Backup written ➜ %s", backup)
+                except Exception as e:
+                    logger.warning(f"Could not create backup: {e}")
 
+            # Write new file
             YAML_PATH.write_text(
                 yaml.safe_dump(data, allow_unicode=True, sort_keys=False),
                 encoding="utf-8"
@@ -241,9 +316,6 @@ class CategoryUpdater:
         except Exception as exc:
             logger.error("Could not save mapping: %s", exc)
             return False
-
-
-
     
     def _should_update(self) -> bool:
         """Check if update is needed."""
@@ -284,6 +356,7 @@ class CategoryUpdater:
                 current_categories = self._load_current_mapping()
                 if current_categories == new_categories:
                     logger.info("Categories unchanged, no update needed")
+                    self._save_status(success=True)  # Still count as success
                     return True
                 
                 # Save new mapping
@@ -339,6 +412,9 @@ class CategoryUpdater:
         status = self.status.copy()
         status["mapping_exists"] = YAML_PATH.exists()
         status["api_key_available"] = self._get_api_key() is not None
+        status["yaml_path"] = str(YAML_PATH)
+        status["mapping_dir"] = str(MAPPING_DIR)
+        status["is_frozen"] = getattr(sys, 'frozen', False)
         
         if YAML_PATH.exists():
             mtime = _dt.datetime.fromtimestamp(YAML_PATH.stat().st_mtime)
@@ -348,7 +424,7 @@ class CategoryUpdater:
         return status
 
 # ---------------------------------------------------------------------------
-# Scheduler functions
+# Scheduler functions (unchanged)
 # ---------------------------------------------------------------------------
 def run_daily_update(game: str = DEFAULT_GAME):
     """Run daily category update."""
@@ -424,7 +500,7 @@ def install_system_scheduler(game: str = DEFAULT_GAME):
         return False
 
 # ---------------------------------------------------------------------------
-# CLI interface
+# CLI interface (unchanged)
 # ---------------------------------------------------------------------------
 def main():
     """Main CLI function."""
