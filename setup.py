@@ -30,7 +30,7 @@ BDIST_MSI_OPTIONS = {'data': MSI_DATA}
 setup(
     name=TITLE,
     version=VERSION,
-    url=URL_WEB,
+    url=URL_GIT_CLONE,
     license='Open-source',
     options={
         "build_exe": {

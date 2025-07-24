@@ -6,13 +6,10 @@ from os import environ
 from api.get_category import CategoryUpdater
 import threading
 
-# Trong phần __main__, thêm trước khi khởi tạo GUI:
 def init_category_updater():
     """Initialize category updater in background"""
     try:
         updater = CategoryUpdater("witcher3")
-        
-        # Check if update needed and run in background
         def background_update():
             try:
                 print("[CategoryUpdater] Checking for category updates...")

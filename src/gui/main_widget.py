@@ -1,10 +1,10 @@
-'''Main Widget'''
+'''Main Widget - FIXED để preserve category expand state'''
 # pylint: disable=invalid-name,superfluous-parens,wildcard-import,bare-except,broad-except,wildcard-import,unused-wildcard-import,missing-docstring,too-many-lines
 
 from os import path
 from sys import platform
 
-from PySide6.QtCore import QFileInfo, QMetaObject, QRect, QSize, Qt, QThread, Signal
+from PySide6.QtCore import QFileInfo, QMetaObject, QRect, QSize, Qt, QThread, Signal,QTimer
 from PySide6.QtGui import QAction, QActionGroup, QCursor, QResizeEvent
 from PySide6.QtWidgets import (
     QAbstractItemView,
@@ -13,6 +13,7 @@ from PySide6.QtWidgets import (
     QHeaderView,
     QInputDialog,
     QLineEdit,
+    QTreeWidgetItemIterator,
     QDialog,
     QMenu,
     QMenuBar,
@@ -83,6 +84,9 @@ class CustomMainWidget(QWidget):
         self.mainWindow = parent
         self.model = model
         self.searchString = ""
+        
+        # NEW: Dictionary để lưu trạng thái expand/collapse của các category
+        self.category_expand_states = {}
 
         self.modsSettingsWatcher = ModsSettingsWatcher()
         self.modsSettingsWatcher.refresh.connect(lambda e: self.refreshLoadOrder())
@@ -110,6 +114,38 @@ class CustomMainWidget(QWidget):
 
         self.actionAlert_to_run_Script_Merger.setChecked(data.config.allowpopups == "1")
         self.actionUseNativeFileDialogs.setChecked(data.config.get("SETTINGS", "usenativedialog", "0") == "1")
+
+    # NEW: Methods để lưu và khôi phục trạng thái expand
+    def saveExpandStates(self):
+        '''Lưu trạng thái expand/collapse của tất cả category groups'''
+        if not self.actionGroupByCategory.isChecked():
+            return
+            
+        for i in range(self.treeWidget.topLevelItemCount()):
+            item = self.treeWidget.topLevelItem(i)
+            category_name = item.text(1)
+            
+            # Chỉ lưu cho category groups (text bắt đầu và kết thúc bằng [])
+            if category_name.startswith('[') and category_name.endswith(']'):
+                self.category_expand_states[category_name] = item.isExpanded()
+
+    def restoreExpandStates(self):
+        '''Khôi phục trạng thái expand/collapse cho các category groups'''
+        if not self.actionGroupByCategory.isChecked():
+            return
+            
+        for i in range(self.treeWidget.topLevelItemCount()):
+            item = self.treeWidget.topLevelItem(i)
+            category_name = item.text(1)
+            
+            # Chỉ khôi phục cho category groups
+            if category_name.startswith('[') and category_name.endswith(']'):
+                if category_name in self.category_expand_states:
+                    item.setExpanded(self.category_expand_states[category_name])
+                else:
+                    # Mặc định expand cho category mới
+                    item.setExpanded(True)
+                    self.category_expand_states[category_name] = True
 
     @debounce(200)
     def onResize(self):
@@ -275,7 +311,6 @@ class CustomMainWidget(QWidget):
         self.horizontalLayout_2.setStretch(1, 1)  # Right side (buttons)
         self.verticalLayout_2.addLayout(self.horizontalLayout_2)
 
-
     def configureUi(self):
         for i in range(self.treeWidget.header().count()):
             if not data.config.getWindowSection(i):
@@ -305,6 +340,7 @@ class CustomMainWidget(QWidget):
         self.actionRun_Script_Merger.triggered.connect(self.runScriptMerger)
         self.actionMain_Web_Page.triggered.connect(lambda: openUrl(URL_WEB))
         self.actionGitHub.triggered.connect(lambda: openUrl(URL_GIT))
+        self.actionGitHub.triggered.connect(lambda: openUrl(URL_GIT_CLONE))
         self.actionAlert_to_run_Script_Merger.triggered.connect(self.alertPopupChanged)
         self.actionUseNativeFileDialogs.triggered.connect(self.nativeFileDialogsChanged)
         self.actionChange_Game_Path.triggered.connect(self.changeGamePath)
@@ -355,7 +391,6 @@ class CustomMainWidget(QWidget):
         '''Open or run any kind of folder/file or executable by configuration key'''
         openFile(getattr(data.config, option))
 
-
     def openMenu(self, position):
         '''Right click context menu with better organization'''
         menu = QMenu()
@@ -397,9 +432,6 @@ class CustomMainWidget(QWidget):
         
         menu.exec(self.treeWidget.viewport().mapToGlobal(position))
 
-
-
-
     # 6. Thêm methods mới để xử lý Nexus Mods:
     def onModSelectionChanged(self):
         '''Handle when mod selection changes - FIXED to handle category groups'''
@@ -427,8 +459,6 @@ class CustomMainWidget(QWidget):
         except Exception as e:
             print(f"Error in onModSelectionChanged: {e}")
             self.descriptionWidget.clear_description()
-
-
 
     def openNexusPage(self):
         '''Open Nexus Mods page for selected mod'''
@@ -472,8 +502,6 @@ class CustomMainWidget(QWidget):
                     self.output("No mod ID available for this mod")
         except Exception as err:
             self.output(formatUserError(err))
-
-
 
     def configureToolbar(self):
         '''Creates and configures toolbar'''
@@ -554,7 +582,6 @@ class CustomMainWidget(QWidget):
         self.actionAddToToolbar = QAction(self.mainWindow)
         self.actionAddToToolbar.triggered.connect(self.addToToolbar)
         self.actionAddToToolbar.setText(translate("MainWindow", "Add New.."))
-
 
     def openEditMenu(self, position):
         '''Right click menu on output'''
@@ -715,7 +742,6 @@ class CustomMainWidget(QWidget):
         except Exception as err:
             self.output(formatUserError(err))
 
-
     def modDoubleClicked(self):
         '''Triggered when double clicked on the mod'''
         self.setPriority()
@@ -799,7 +825,6 @@ class CustomMainWidget(QWidget):
         else:
             data.config.set("SETTINGS", "usenativedialog", "0")
 
-
     def changeLanguage(self, language):
         '''Triggered when language is changed. Saves the change and restarts the program'''
         data.config.language = str(language)
@@ -823,8 +848,91 @@ class CustomMainWidget(QWidget):
                 lang.setChecked(True)
                 break
 
+
+
+    def restoreSelection(self, mod_names):
+        try:
+            if not mod_names:
+                return
+                
+            for mod_name in mod_names:
+                if self.actionGroupByCategory.isChecked():
+                    self.restoreSelectionInCategoryMode(mod_name)
+                else:
+                    self.restoreSelectionInNormalMode(mod_name)
+                    
+        except Exception as e:
+            print(f"Error restoring selection: {e}")
+
+    def restoreSelectionInNormalMode(self, mod_name):
+        '''Restore selection in normal (non-grouped) mode'''
+        items = self.treeWidget.findItems(mod_name, Qt.MatchExactly, 1)
+        for item in items:
+            if not (item.text(1).startswith('[') and item.text(1).endswith(']')):
+                item.setSelected(True)
+
+    def restoreSelectionInCategoryMode(self, mod_name):
+        '''Restore selection in category grouped mode'''
+        # Duyệt qua tất cả category groups (top level items)
+        for i in range(self.treeWidget.topLevelItemCount()):
+            category_item = self.treeWidget.topLevelItem(i)
+            
+            # Duyệt qua tất cả children của category này
+            for j in range(category_item.childCount()):
+                child_item = category_item.child(j)
+                if child_item.text(1) == mod_name:
+                    child_item.setSelected(True)
+                    
+                    # Ensure category is expanded để thấy selected item
+                    category_item.setExpanded(True)
+                    
+                    # Scroll to make sure item is visible
+                    self.treeWidget.scrollToItem(child_item)
+                    return
+
+    def restoreSelectionAdvanced(self, mod_names):
+        '''Advanced selection restoration using iterator'''
+        try:
+            if not mod_names:
+                return
+                
+            # Sử dụng iterator để duyệt tất cả items
+            iterator = QTreeWidgetItemIterator(self.treeWidget)
+            
+            while iterator.value():
+                item = iterator.value()
+                item_name = item.text(1)
+                
+                # Check if this item should be selected
+                if item_name in mod_names:
+                    # Skip category groups
+                    if not (item_name.startswith('[') and item_name.endswith(']')):
+                        item.setSelected(True)
+                        
+                        # If in category mode, ensure parent is expanded
+                        if self.actionGroupByCategory.isChecked():
+                            parent = item.parent()
+                            if parent:
+                                parent.setExpanded(True)
+                
+                iterator += 1
+                
+        except Exception as e:
+            print(f"Error in advanced selection restoration: {e}")      
+
+    def preserveSelection(func):
+        def wrapper(self, *args, **kwargs):
+            selected = self.getSelectedMods()
+            result = func(self, *args, **kwargs)
+            if selected:
+                self.restoreSelectionAdvanced(selected)
+            
+            return result
+        return wrapper
+
+    @preserveSelection
     def setPriority(self):
-        '''Sets the priority of the selected mods'''
+        '''Sets the priority of the selected mods - FIXED to preserve selection'''
         try:
             selected = self.getSelectedMods()
             if selected:
@@ -854,6 +962,7 @@ class CustomMainWidget(QWidget):
         except Exception as err:
             self.output(formatUserError(err))
 
+    @preserveSelection  
     def unsetPriority(self):
         '''Removes priority of the selected mods'''
         selected = self.getSelectedMods()
@@ -863,6 +972,7 @@ class CustomMainWidget(QWidget):
             data.config.write_priority()
             self.refreshList()
 
+    @preserveSelection  
     def increasePriority(self):
         '''Increases the priority of the selected mods'''
         selected = self.getSelectedMods()
@@ -872,6 +982,7 @@ class CustomMainWidget(QWidget):
             data.config.write_priority()
             self.refreshList()
 
+    @preserveSelection  
     def decreasePriority(self):
         '''Decreases the priority of the selected mods'''
         selected = self.getSelectedMods()
@@ -911,7 +1022,6 @@ class CustomMainWidget(QWidget):
             self.installModFiles(files)
         else:
             self.output(translate("MainWindow", "Installation canceled - no files selected"))
-
 
     def installModFiles(self, file):
         '''Installs passed list of mods'''
@@ -1090,12 +1200,21 @@ class CustomMainWidget(QWidget):
         '''Selects all mods in the list'''
         self.treeWidget.selectAll()
 
+    @preserveSelection
     def enableDisableMods(self):
-        '''Changes checked state of the selected mods'''
+        '''Changes checked state of the selected mods - FIXED to preserve selection'''
         try:
             selected = self.treeWidget.selectedItems()
             if not selected:
                 return
+            
+            # Lưu tên mods để khôi phục selection sau
+            mod_names = []
+            for item in selected:
+                mod_name = item.text(1)
+                if not (mod_name.startswith('[') and mod_name.endswith(']')):
+                    mod_names.append(mod_name)
+            
             self.setProgress(0)
             progress = 0
             progressMax = len(selected)
@@ -1106,12 +1225,18 @@ class CustomMainWidget(QWidget):
                     item.setCheckState(0, Qt.Checked)
                 progress += 1
                 self.setProgress(100 * progress / progressMax)
+            
             self.refreshList()
+            
+            # Khôi phục selection
+            self.restoreSelection(mod_names)
+            
             self.alertRunScriptMerger()
             self.setProgress(0)
         except Exception as err:
             self.setProgress(0)
             self.output(formatUserError(err))
+
 
     def setSearchString(self, searchString):
         self.searchString = searchString
@@ -1121,9 +1246,15 @@ class CustomMainWidget(QWidget):
 
     @throttle(200)
     def refreshList(self):
-        '''Refreshes mod list - UPDATED with category support'''
+        '''ENHANCED: Refreshes mod list with perfect selection preservation for category mode'''
         try:
-            selected = self.getSelectedMods()
+            # Lưu selection hiện tại với more detailed info
+            current_selection = self.getSelectedMods()
+            current_scroll_position = self.treeWidget.verticalScrollBar().value()
+            
+            # Lưu trạng thái expand trước khi clear
+            self.saveExpandStates()
+            
             self.treeWidget.clear()
             
             # Group mods by category if enabled
@@ -1151,6 +1282,13 @@ class CustomMainWidget(QWidget):
                             len(mod.xmlkeys), len(mod.hidden), len(mod.inputsettings),
                             userstr, modsize, mod.date, mod.category
                         )
+                
+                # Khôi phục trạng thái expand
+                self.restoreExpandStates()
+                
+                # Khôi phục selection với delay nhỏ để ensure tree đã được render
+                if current_selection:
+                    QTimer.singleShot(10, lambda: self.restoreSelectionAdvanced(current_selection))
             else:
                 # Normal list without grouping
                 for mod in self.model.all():
@@ -1167,13 +1305,13 @@ class CustomMainWidget(QWidget):
                         len(mod.xmlkeys), len(mod.hidden), len(mod.inputsettings),
                         userstr, modsize, mod.date, mod.category
                     )
+                
+                # Khôi phục selection ngay lập tức cho normal mode
+                if current_selection:
+                    self.restoreSelectionAdvanced(current_selection)
             
-            # Restore selection
-            for item in selected:
-                rows = self.treeWidget.findItems(item, Qt.MatchEndsWith, 1)
-                if rows:
-                    for row in rows:
-                        row.setSelected(True)
+            # Khôi phục scroll position
+            QTimer.singleShot(50, lambda: self.treeWidget.verticalScrollBar().setValue(current_scroll_position))
             
             self.refreshLoadOrder()
             self.model.write()
@@ -1181,6 +1319,7 @@ class CustomMainWidget(QWidget):
             self.output(translate("MainWindow", "Couldn't refresh list: ") + f"{formatUserError(err)}")
             return err
         return None
+
 
     def calculateModSize(self, mod):
         '''Calculate total size of mod files'''
@@ -1236,8 +1375,9 @@ class CustomMainWidget(QWidget):
         '''Sets the progress to currentProgress'''
         self.progressBar.setProperty("value", currentProgress)
 
+    @preserveSelection
     def setCategory(self):
-        '''Sets the category of the selected mods'''
+        '''Sets the category of the selected mods - FIXED to preserve selection'''
         try:
             selected = self.getSelectedMods()
             if selected:
@@ -1259,7 +1399,6 @@ class CustomMainWidget(QWidget):
     def toggleGroupByCategory(self):
         '''Toggle grouping mods by category'''
         self.refreshList()
-
 
     def addToList(self, on, name, prio, data_, dlc, menu, keys, hidden, inputkeys, settings, size, date, category='General'):
         '''Adds mod data to the list - UPDATED to include category'''
@@ -1334,47 +1473,74 @@ class CustomMainWidget(QWidget):
         return item
 
     def addToGroupedList(self, item, category):
+        '''UPDATED: Thêm item vào grouped list với proper expand state handling'''
         category_item = None
+        category_name = f"[{category}]"
+        
+        # Tìm category item đã tồn tại
         for i in range(self.treeWidget.topLevelItemCount()):
             top_item = self.treeWidget.topLevelItem(i)
-            if top_item.text(1) == f"[{category}]":
+            if top_item.text(1) == category_name:
                 category_item = top_item
                 break
         
+        # Tạo category item mới nếu chưa có
         if not category_item:
-
             category_item = CustomTreeWidgetItem([
-                "", f"[{category}]", "", "", "", "", "", "", "", "", "", "", ""
+                "", category_name, "", "", "", "", "", "", "", "", "", "", ""
             ])
-            category_item.setExpanded(True)
             
+            # Style cho category item
             from PySide6.QtGui import QFont
             font = QFont()
             font.setBold(True)
             category_item.setFont(1, font)
             
+            # Disable checkbox cho category item
             category_item.setFlags(category_item.flags() & ~Qt.ItemIsUserCheckable)
             
             self.treeWidget.addTopLevelItem(category_item)
+            
+            # Set expand state: kiểm tra saved state hoặc mặc định True
+            if category_name in self.category_expand_states:
+                category_item.setExpanded(self.category_expand_states[category_name])
+            else:
+                category_item.setExpanded(True)
+                self.category_expand_states[category_name] = True
         
+        # Thêm mod item vào category
         category_item.addChild(item)
 
-
     def getSelectedMods(self):
-        '''Returns list of mod names of the selected mods - FIXED to handle category groups'''
+        '''Returns list of mod names of the selected mods - ENHANCED for category mode'''
         array = []
-        getSelected = self.treeWidget.selectedItems()
-        if getSelected:
-            for selected in getSelected:
-                mod_name = selected.text(1)
+        
+        if self.actionGroupByCategory.isChecked():
+            # CATEGORY MODE: Sử dụng iterator để duyệt tất cả items
+            iterator = QTreeWidgetItemIterator(self.treeWidget, QTreeWidgetItemIterator.Selected)
+            
+            while iterator.value():
+                item = iterator.value()
+                mod_name = item.text(1)
                 
-                # Skip category groups
-                if mod_name.startswith('[') and mod_name.endswith(']'):
-                    continue
-                    
-                # Skip empty names
-                if mod_name.strip():
+                # Skip category groups và empty names
+                if (not (mod_name.startswith('[') and mod_name.endswith(']')) 
+                    and mod_name.strip()):
                     array.append(mod_name)
+                
+                iterator += 1
+        else:
+            # NORMAL MODE: Sử dụng selectedItems như cũ
+            getSelected = self.treeWidget.selectedItems()
+            if getSelected:
+                for selected in getSelected:
+                    mod_name = selected.text(1)
+                    
+                    # Skip category groups và empty names
+                    if (not (mod_name.startswith('[') and mod_name.endswith(']')) 
+                        and mod_name.strip()):
+                        array.append(mod_name)
+        
         return array
 
     def getSelectedFiles(self):
@@ -1632,8 +1798,6 @@ class CustomMainWidget(QWidget):
         self.menubar.addAction(self.menuSettings.menuAction())
         self.menubar.addAction(self.menuHelp.menuAction())
 
-
-
     def showDialogPreferences(self):
         '''Show dialog preferences configuration'''
         try:
@@ -1666,7 +1830,6 @@ class CustomMainWidget(QWidget):
                 
         except Exception as err:
             self.output(formatUserError(err))
-
 
     def updateCategoryFromNexus(self):
         '''Update category for selected mod từ Nexus Mods'''
@@ -1730,10 +1893,6 @@ class CustomMainWidget(QWidget):
         except Exception as err:
             self.setProgress(0)
             self.output(formatUserError(err))
-
-
-
-
 
     def populateMenu(self):
         '''Populate menus with improved organization'''
@@ -1816,8 +1975,6 @@ class CustomMainWidget(QWidget):
         self.menuHelp.addSeparator()
         self.menuHelp.addAction(self.actionMain_Web_Page)
         self.menuHelp.addAction(self.actionGitHub)
-
-
 
     def translateUi(self):
         self.mainWindow.setWindowTitle(translate("MainWindow", TITLE))
