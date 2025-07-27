@@ -1578,15 +1578,64 @@ class CustomMainWidget(QWidget):
             if res == QMessageBox.Yes:
                 self.runScriptMerger()
 
+    def create_theme_handler(self, theme_name):
+        """Create theme change handler to fix lambda closure issue"""
+        def handler():
+            self.changeTheme(theme_name)
+        return handler
+
+    # Và thay thế hàm changeTheme():
+
     def changeTheme(self, theme):
+        """Switch between themes với 3 theme mới"""
+        from src.gui.themes import (
+            setup_enhanced_dark_theme, 
+            setup_universe_theme, 
+            setup_emerald_theme,
+            get_system_palette
+        )
+        
         data.config.theme = theme
-        if theme == "Dark":
-            data.app.setPalette(get_dark_palette())
-        elif theme == "Light":
-            data.app.setPalette(get_light_palette())
-        else:
+        print(f"[Theme] Switching to: {theme}")
+        
+        try:
+            if theme == "Enhanced Dark":
+                setup_enhanced_dark_theme(data.app)
+                print("[Theme] Applied Enhanced Dark theme với hover effects")
+            elif theme == "Universe":
+                setup_universe_theme(data.app)
+                print("[Theme] Applied Universe/Galaxy theme")
+            elif theme == "Emerald":
+                setup_emerald_theme(data.app)
+                print("[Theme] Applied Emerald theme")
+            else:  # Follow System
+                data.app.setStyle("Fusion")
+                data.app.setPalette(get_system_palette())
+                print("[Theme] Applied system theme")
+            
+            data.config.write_config()
+            
+            # Force refresh UI - Fix QTreeWidget.update() issue
+            if hasattr(self, 'treeWidget') and self.treeWidget:
+                self.treeWidget.repaint()
+            if hasattr(self, 'loadOrder') and self.loadOrder:
+                self.loadOrder.repaint()
+            if hasattr(self, 'textBrowser') and self.textBrowser:
+                self.textBrowser.repaint()
+            if hasattr(self, 'menubar') and self.menubar:
+                self.menubar.repaint()
+            
+            # Refresh toàn bộ main window
+            if hasattr(self, 'mainWindow') and self.mainWindow:
+                self.mainWindow.repaint()
+                
+        except Exception as e:
+            print(f"[Theme] Error applying theme {theme}: {e}")
+            # Fallback to system theme
+            data.app.setStyle("Fusion")
             data.app.setPalette(get_system_palette())
-        data.config.write_config()
+
+
 
     def checkTheme(self):
         theme = data.config.theme
@@ -1724,11 +1773,12 @@ class CustomMainWidget(QWidget):
             self.languageActionGroup.addAction(temp)
             self.menuSelect_Language.addAction(temp)
 
-        # Create theme actions
         self.themeActionGroup = QActionGroup(self.mainWindow)
-        for theme in ["Follow System", "Light", "Dark"]:
+        theme_list = ["Follow System", "Enhanced Dark", "Universe", "Emerald"]
+        for theme in theme_list:
             action = QAction(theme, self.mainWindow, checkable=True)
-            action.triggered.connect(lambda _, t=theme: self.changeTheme(t))
+            # Fix lambda closure issue
+            action.triggered.connect(self.create_theme_handler(theme))
             self.themeActionGroup.addAction(action)
             self.menuSelect_Theme.addAction(action)
 

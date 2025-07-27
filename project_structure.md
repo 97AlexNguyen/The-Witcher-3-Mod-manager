@@ -1738,6 +1738,7 @@ The-Witcher-3-Mod-manager
 │       ├── python312.dll
 │       ├── qt.conf
 │       ├── TheWitcher3ModManager.exe
+│       ├── TheWitcher3ModManager.zip
 │       ├── vcamp140.dll
 │       ├── vccorlib140.dll
 │       ├── vcomp140.dll

@@ -151,8 +151,14 @@ def initialize_application():
         from src.gui.alerts import MessageAlertOtherInstance, MessageInitializationFailed
         from src.gui.main_widget import CustomMainWidget
         from src.gui.main_window import CustomMainWindow
-        from src.gui.themes import get_dark_palette, get_light_palette, get_system_palette
-        from src.util.util import formatUserError, translateToChosenLanguage, fixUserSettingsDuplicateBrackets, reconfigureGamePath,getIcon
+        from src.gui.themes import (
+            setup_enhanced_dark_theme, 
+            setup_universe_theme, 
+            setup_emerald_theme,
+            get_system_palette,
+            get_enhanced_dark_palette
+        )
+        from src.util.util import formatUserError, translateToChosenLanguage, fixUserSettingsDuplicateBrackets, reconfigureGamePath, getIcon
 
         # Parse arguments
         debug, documentsPath, gamePath, configPath = parse_arguments()
@@ -162,17 +168,26 @@ def initialize_application():
         data.debug = debug
         data.config = Configuration(documentsPath, gamePath, configPath)
         
-        # Setup theme
-        data.app.setStyle("Fusion")
-        data.dark_palette = get_dark_palette()
-        data.light_palette = get_light_palette()
-
-        if data.config.theme == 'Dark':
-            data.app.setPalette(data.dark_palette)
-        elif data.config.theme == 'Light':
-            data.app.setPalette(data.light_palette)
-        else:  # Follow System
+        # Setup new themes
+        print(f"[Theme] Applying theme: {data.config.theme}")
+        
+        if data.config.theme == 'Enhanced Dark':
+            setup_enhanced_dark_theme(data.app)
+            print("[Theme] Enhanced Dark theme với hover effects applied")
+        elif data.config.theme == 'Universe':
+            setup_universe_theme(data.app)
+            print("[Theme] Universe/Galaxy theme applied")
+        elif data.config.theme == 'Emerald':
+            setup_emerald_theme(data.app)
+            print("[Theme] Emerald theme applied")
+        else:  # Follow System hoặc các theme cũ
+            data.app.setStyle("Fusion")
             data.app.setPalette(get_system_palette())
+            print("[Theme] System theme applied")
+        
+        # Set palettes cho compatibility
+        data.dark_palette = get_enhanced_dark_palette()
+        data.light_palette = get_enhanced_dark_palette()  # Fallback
 
         # Setup language
         translateToChosenLanguage()
@@ -207,6 +222,7 @@ def initialize_application():
 
         # Show window
         mainWindow.show()
+        print("[UI] Application window displayed")
 
         # Run application
         ret = data.app.exec()
@@ -223,17 +239,20 @@ def initialize_application():
         import traceback
         from src.util.util import formatUserError
         
-        print(formatUserError(e), file=sys.stderr)
+        error_msg = formatUserError(e)
+        print(error_msg, file=sys.stderr)
+        print(f"[Error] Traceback: {traceback.format_exc()}", file=sys.stderr)
         
         try:
             if sys.platform == "win32":
                 import win32api  # pylint: disable=import-error # type: ignore
                 win32api.MessageBox(
-                    0, f'{str(e)}\n\n{traceback.format_exc()}', "Unexpected Error", 0x10)
+                    0, f'{error_msg}\n\n{traceback.format_exc()}', "Witcher 3 Mod Manager - Unexpected Error", 0x10)
         except Exception as x:
             print("Failed to show error message: " + formatUserError(x), file=sys.stderr)
         
         return 1
+    
 
 if __name__ == "__main__":
     try:

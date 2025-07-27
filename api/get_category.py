@@ -104,12 +104,11 @@ def get_resource_paths():
 # Configuration
 # ---------------------------------------------------------------------------
 DEFAULT_GAME = "witcher3"
-CACHE_EXPIRY = _dt.timedelta(hours=23)  # Update mỗi 23 giờ để đảm bảo daily update
-UPDATE_HOUR = 2  # Cập nhật lúc 2 giờ sáng mỗi ngày
+CACHE_EXPIRY = _dt.timedelta(hours=23) 
+UPDATE_HOUR = 2  
 MAX_RETRIES = 3
-RETRY_DELAY = 300  # 5 phút
+RETRY_DELAY = 300  
 
-# Get paths using resource-aware function
 PATHS = get_resource_paths()
 ROOT_DIR = PATHS['base_dir']
 MAPPING_DIR = PATHS['mapping_dir']
@@ -351,6 +350,7 @@ class CategoryUpdater:
                 new_categories = self._fetch_categories_from_api()
                 if not new_categories:
                     raise Exception("Could not fetch categories from API")
+                new_categories.update(self._load_custom_categories())
                 
                 # Compare with existing
                 current_categories = self._load_current_mapping()
@@ -382,7 +382,20 @@ class CategoryUpdater:
                     return False
         
         return False
-    
+        
+    def _load_custom_categories(self) -> Dict[int, str]:
+        """Load optional custom category file (may be empty)."""
+        custom_path = MAPPING_DIR / "custom_categories.yaml"
+        if not custom_path.exists():
+            return {} 
+        try:
+            doc = yaml.safe_load(custom_path.read_text(encoding="utf-8")) or {}
+            return {int(k): v for k, v in doc.get("Category_Mapping", {}).items()}
+        except Exception as exc:
+            logger.warning("Could not load custom categories: %s", exc)
+            return {}
+
+
     def _log_changes(self, old: Optional[Dict[int, str]], new: Dict[int, str]) -> Dict[str, int]:
         """Log changes between old and new categories."""
         if not old:
