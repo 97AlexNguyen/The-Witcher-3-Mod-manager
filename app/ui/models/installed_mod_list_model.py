@@ -59,6 +59,41 @@ class InstalledModListModel(QAbstractListModel):
     def mod_at(self, row: int) -> InstalledMod:
         return self._mods[row]
 
+    def row_for(self, mod: InstalledMod) -> int:
+        """Locate a mod by object identity.
+
+        InstalledMod is a mutable dataclass with value equality, so list.index()
+        would match the first field-identical mod rather than this exact one.
+        """
+        for row, candidate in enumerate(self._mods):
+            if candidate is mod:
+                return row
+        return -1
+
+    def set_category(self, mod: InstalledMod, category_key: str) -> bool:
+        row = self.row_for(mod)
+        if row < 0:
+            return False
+        mod.category_key = category_key
+        index = self.index(row, 0)
+        self.dataChanged.emit(index, index, [InstalledModRoles.MOD, InstalledModRoles.CATEGORY_COLOR])
+        return True
+
+    def set_priority(self, mod: InstalledMod, priority: int | None) -> bool:
+        """Update the displayed priority.
+
+        Priority belongs to game config (the game reads it at startup), not to the
+        manifest, and the merge step is what writes it. Nothing in the UI edits it —
+        this exists for whatever reads game config back in.
+        """
+        row = self.row_for(mod)
+        if row < 0:
+            return False
+        mod.priority = priority
+        index = self.index(row, 0)
+        self.dataChanged.emit(index, index, [InstalledModRoles.MOD])
+        return True
+
     @property
     def mods(self) -> tuple[InstalledMod, ...]:
         return tuple(self._mods)

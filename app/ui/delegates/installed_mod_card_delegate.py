@@ -1,8 +1,8 @@
 from __future__ import annotations
 
-from PyQt6.QtCore import QEvent, QRect, QRectF, QSize, Qt
+from PyQt6.QtCore import QEvent, QRect, QRectF, QSize, Qt, pyqtSignal
 from PyQt6.QtGui import QColor, QFont, QMouseEvent, QPainter, QPainterPath, QPalette, QPen
-from PyQt6.QtWidgets import QStyle, QStyledItemDelegate, QStyleOptionViewItem
+from PyQt6.QtWidgets import QStyle, QStyledItemDelegate, QStyleOptionViewItem, QToolTip
 
 from app.domain import ModStatus
 from app.ui.models import InstalledModRoles
@@ -30,6 +30,8 @@ from app.ui.theme.tokens import (
 
 
 class InstalledModCardDelegate(QStyledItemDelegate):
+    remove_requested = pyqtSignal(object)
+
     ACTION_WIDTH = 112
     ACTION_HEIGHT = 28
 
@@ -129,8 +131,7 @@ class InstalledModCardDelegate(QStyledItemDelegate):
         self._paint_health(painter, content_left + 112, card.top() + 76, mod.status, theme)
 
         self._paint_action(painter, action_rects[0], "DISABLE" if mod.enabled else "ENABLE", theme)
-        self._paint_action(painter, action_rects[1], "DETAILS", theme)
-        self._paint_action(painter, action_rects[2], "REMOVE", theme, danger=True)
+        self._paint_action(painter, action_rects[1], "REMOVE", theme, danger=True)
         painter.restore()
 
     def editorEvent(self, event, model, option, index) -> bool:  # noqa: N802
@@ -139,20 +140,42 @@ class InstalledModCardDelegate(QStyledItemDelegate):
         if event.button() != Qt.MouseButton.LeftButton:
             return False
         card = option.rect.adjusted(0, SPACING_XS, 0, -SPACING_XS)
-        toggle_rect, details_rect, remove_rect = self._action_rects(card)
+        toggle_rect, remove_rect = self._action_rects(card)
         point = event.position().toPoint()
         if toggle_rect.contains(point):
             return model.setData(index, not bool(index.data(InstalledModRoles.ENABLED)), InstalledModRoles.ENABLED)
-        if details_rect.contains(point) or remove_rect.contains(point):
+        if remove_rect.contains(point):
+            mod = index.data(InstalledModRoles.MOD)
+            if mod is not None:
+                self.remove_requested.emit(mod)
             return True
         return False
 
-    def _action_rects(self, card: QRect) -> tuple[QRect, QRect, QRect]:
+    def helpEvent(self, event, view, option, index) -> bool:  # noqa: N802
+        if event.type() != QEvent.Type.ToolTip:
+            return super().helpEvent(event, view, option, index)
+        mod = index.data(InstalledModRoles.MOD)
+        if mod is None:
+            return super().helpEvent(event, view, option, index)
+        card = option.rect.adjusted(0, SPACING_XS, 0, -SPACING_XS)
+        toggle_rect, remove_rect = self._action_rects(card)
+        tips = (
+            (toggle_rect, f"{'Disable' if mod.enabled else 'Enable'} {mod.name}  (Space)"),
+            (remove_rect, f"Remove {mod.name}  (Delete)"),
+        )
+        for rect, text in tips:
+            if rect.contains(event.pos()):
+                QToolTip.showText(event.globalPos(), text, view)
+                return True
+        return super().helpEvent(event, view, option, index)
+
+    def _action_rects(self, card: QRect) -> tuple[QRect, QRect]:
         left = card.right() - SPACING_SM - self.ACTION_WIDTH
-        first = QRect(left, card.top() + SPACING_SM, self.ACTION_WIDTH, self.ACTION_HEIGHT)
+        block = self.ACTION_HEIGHT * 2 + SPACING_XS
+        top = card.top() + (card.height() - block) // 2
+        first = QRect(left, top, self.ACTION_WIDTH, self.ACTION_HEIGHT)
         second = first.translated(0, self.ACTION_HEIGHT + SPACING_XS)
-        third = second.translated(0, self.ACTION_HEIGHT + SPACING_XS)
-        return first, second, third
+        return first, second
 
     @staticmethod
     def _paint_status_badge(painter: QPainter, thumbnail: QRect, enabled: bool, theme) -> None:

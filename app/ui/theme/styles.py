@@ -37,6 +37,9 @@ QWidget#pageSurface {{ background: {c.background}; }}
 QFrame#appHeader {{ background: {c.surface_lowest}; border-bottom: 1px solid {c.outline_variant}; }}
 QLabel#brandMark {{ background: {c.primary_fixed}; color: {c.primary}; border: 1px solid {c.outline_variant}; border-radius: 22px; font-weight: 700; }}
 QFrame#filterBar {{ background: {c.surface_lowest}; border: 1px solid {c.outline_variant}; border-radius: {RADIUS_LG}px; }}
+QFrame#detailPanel {{ background: {c.surface_lowest}; border: 1px solid {c.outline_variant}; border-radius: {RADIUS_LG}px; }}
+QFrame#detailMeta, QWidget#detailSection {{ background: {c.surface_low}; border: 1px solid {c.outline_variant}; border-radius: {RADIUS_DEFAULT}px; }}
+QLabel#detailEmptyIcon {{ color: {c.primary}; font-size: 32px; }}
 QFrame#filterBar QLineEdit, QFrame#filterBar QComboBox {{ min-height: 40px; border-radius: {RADIUS_DEFAULT}px; }}
 QFrame#filterBar QPushButton {{ min-height: 40px; }}
 QLabel[class="headline-md"] {{ font-family: '{heading_font}'; font-size: {TYPO_HEADLINE_MD[0]}px; font-weight: {TYPO_HEADLINE_MD[1]}; }}
@@ -55,6 +58,9 @@ QPushButton[class="danger"] {{ color: {COLOR_DANGER}; border-color: {COLOR_DANGE
 QPushButton[class="danger"]:hover {{ background: {c.surface_low}; }}
 QPushButton[class="ghost"] {{ min-width: 34px; padding: 0 {SPACING_SM}px; background: transparent; border-color: transparent; color: {c.on_surface_variant}; }}
 QPushButton[class="ghost"]:hover {{ background: {c.surface_low}; color: {c.on_surface}; }}
+QPushButton[class="detailSegment"] {{ min-height: 28px; padding: 0 {SPACING_XS}px; background: transparent; border-color: transparent; color: {c.on_surface_variant}; font-size: {TYPO_LABEL_SM[0]}px; }}
+QPushButton[class="detailSegment"]:hover {{ background: {c.surface_low}; color: {c.on_surface}; }}
+QPushButton[class="detailSegment"]:checked {{ background: {c.primary_fixed}; color: {c.primary}; }}
 QLineEdit, QComboBox, QSpinBox {{ min-height: 34px; padding: 0 {SPACING_SM}px; background: {c.surface_lowest}; border: 1px solid {c.outline_variant}; border-radius: {RADIUS_SM}px; selection-background-color: {c.primary_fixed}; }}
 QLineEdit:hover, QComboBox:hover, QSpinBox:hover {{ border-color: {c.outline}; }}
 QLineEdit:focus, QComboBox:focus, QSpinBox:focus {{ border: 2px solid {c.primary}; }}
@@ -64,10 +70,14 @@ QListView#modCardList {{ background: transparent; border: none; padding: 0; }}
 QListView#modCardList::item {{ background: transparent; border: none; }}
 QListView#modCardList::item:selected {{ background: transparent; }}
 QWidget#emptyState {{ background: {c.surface_lowest}; border: 1px solid {c.outline_variant}; border-radius: {RADIUS_LG}px; }}
+QLabel#noticeBar {{ padding: {SPACING_SM}px {SPACING_MD}px; background: {c.primary_fixed}; color: {c.primary}; border: 1px solid {c.primary}; border-radius: {RADIUS_DEFAULT}px; font-size: {TYPO_BODY_SM[0]}px; }}
+QScrollArea#detailScroll {{ background: transparent; border: none; }}
+QScrollArea#detailScroll QWidget#qt_scrollarea_viewport {{ background: transparent; }}
 QScrollBar:vertical {{ width: 6px; background: transparent; }}
 QScrollBar::handle:vertical {{ min-height: 24px; background: {c.outline_variant}; border-radius: 3px; }}
 QScrollBar::handle:vertical:hover {{ background: {c.outline}; }}
 QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {{ height: 0; }}
+QSplitter#modWorkspaceSplitter::handle {{ background: {c.outline_variant}; width: 1px; }}
 QToolTip {{ padding: {SPACING_XS}px {SPACING_SM}px; background: {c.inverse_surface}; color: {c.inverse_on_surface}; border: none; border-radius: {RADIUS_SM}px; font-size: {TYPO_LABEL_SM[0]}px; }}
 """
 
