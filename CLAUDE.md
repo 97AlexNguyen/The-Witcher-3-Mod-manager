@@ -6,6 +6,29 @@ Guidance for AI assistants (Claude Code) working in this repository.
 
 This repository was wiped clean for a full rewrite (see git log: "clean project for refactor"). The previous architecture is gone — do not assume any prior file layout, module structure, or pattern still applies. This is a from-scratch implementation of a Witcher 3 mod manager.
 
+## Terminology — read this first
+
+Two unrelated sets of files are both casually called "settings". Confusing them corrupts
+the user's game install. Always use these terms; never write "settings" unqualified.
+
+| Term | What it is | Where it lives | Who reads it | Format |
+|------|-----------|----------------|--------------|--------|
+| **Manifest** | This app's own record of which mods are installed, their category, priority, and what each one wrote where | `%LOCALAPPDATA%\The Witcher 3 Mod Manager\` | **Only this app** | **JSON** — we choose it |
+| **Game config** | The game's own configuration that mods merge into | `<game>\bin\config\r4game\user_config_matrix\pc\` and `<Documents>\The Witcher 3\` | **REDengine, at startup** | XML / INI / UTF-16 text — **the game dictates it** |
+
+Rules that follow from this:
+
+- **Never** propose changing the format of game config. `input.xml`, `hidden.xml`, the menu
+  xml files, `user.settings`, `dx12user.settings`, `input.settings`, and
+  `dx11filelist.txt` / `dx12filelist.txt` are read by the game engine. It does not parse
+  JSON. Their formats and encodings (including UTF-16) are hard external constraints.
+- Installing a mod **merges into** game config — it is not a folder copy. Those merges can
+  each fail independently, leaving a mod installed but half-broken.
+- The manifest is ours alone. It is machine-written and machine-read; no user edits it by
+  hand.
+- In code and docs, prefer `manifest` and `game_config` as identifiers. Do not name
+  anything just `settings`.
+
 ## Python environment
 
 - Always use the Conda environment named `w3_manager` for every Python command in this repo — never system Python or another Conda environment.
@@ -32,7 +55,13 @@ This repository was wiped clean for a full rewrite (see git log: "clean project 
 This tool revolves around the Nexus Mods API and mod archive files (zip/rar/7z). Prefer existing pip packages over hand-rolled implementations:
 
 - **File watching**: `watchdog` — for detecting changes in mod/game directories.
-- **YAML**: `pyyaml` — for config/metadata files.
+- **Manifest**: stdlib `json`. Machine-written and machine-read, so JSON's lack of type
+  coercion is the point: YAML would silently turn mod version `1.10` into the float `1.1`
+  and a category named `NO` into `False`. JSON is also UTF-8 by spec, so the manifest
+  never needs encoding detection. Do not add `pyyaml` for this — reach for YAML only if a
+  file is ever introduced that users edit by hand, and none exists today.
+- **Game config**: format is fixed by the engine, not by us — see Terminology. Use stdlib
+  `xml.etree.ElementTree` for xml and `configparser` for the INI-like `.settings` files.
 - **HTTP / Nexus API**: `requests`.
 - **Archives**:
   - `.zip` — stdlib `zipfile`, no extra dependency needed.

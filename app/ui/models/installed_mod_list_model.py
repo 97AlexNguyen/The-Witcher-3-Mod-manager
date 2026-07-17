@@ -1,0 +1,64 @@
+from __future__ import annotations
+
+from enum import IntEnum
+
+from PyQt6.QtCore import QAbstractListModel, QModelIndex, Qt
+
+from app.domain import InstalledMod
+from app.ui.theme.tokens import CATEGORY_COLORS, CATEGORY_KEY_COLORS
+
+
+class InstalledModRoles(IntEnum):
+    MOD = Qt.ItemDataRole.UserRole + 1
+    ENABLED = Qt.ItemDataRole.UserRole + 2
+    CATEGORY_COLOR = Qt.ItemDataRole.UserRole + 3
+    DESCRIPTION = Qt.ItemDataRole.UserRole + 4
+    THUMBNAIL_PATH = Qt.ItemDataRole.UserRole + 5
+
+
+class InstalledModListModel(QAbstractListModel):
+    def __init__(self, mods: list[InstalledMod], parent=None) -> None:
+        super().__init__(parent)
+        self._mods = mods
+
+    def rowCount(self, parent=QModelIndex()) -> int:  # noqa: N802
+        return 0 if parent.isValid() else len(self._mods)
+
+    def data(self, index: QModelIndex, role=Qt.ItemDataRole.DisplayRole):
+        if not index.isValid():
+            return None
+        mod = self._mods[index.row()]
+        if role == Qt.ItemDataRole.DisplayRole:
+            return mod.name
+        if role == Qt.ItemDataRole.ToolTipRole:
+            return f"{mod.name}\n\n{mod.description}"
+        if role == InstalledModRoles.MOD:
+            return mod
+        if role == InstalledModRoles.ENABLED:
+            return mod.enabled
+        if role == InstalledModRoles.DESCRIPTION:
+            return mod.description
+        if role == InstalledModRoles.THUMBNAIL_PATH:
+            return mod.thumbnail_path
+        if role == InstalledModRoles.CATEGORY_COLOR:
+            return CATEGORY_KEY_COLORS.get(mod.category_key, CATEGORY_COLORS["neutral"])
+        return None
+
+    def flags(self, index: QModelIndex) -> Qt.ItemFlag:
+        if not index.isValid():
+            return Qt.ItemFlag.NoItemFlags
+        return Qt.ItemFlag.ItemIsEnabled | Qt.ItemFlag.ItemIsSelectable | Qt.ItemFlag.ItemIsEditable
+
+    def setData(self, index: QModelIndex, value, role=Qt.ItemDataRole.EditRole) -> bool:  # noqa: N802
+        if not index.isValid() or role != InstalledModRoles.ENABLED:
+            return False
+        self._mods[index.row()].enabled = bool(value)
+        self.dataChanged.emit(index, index, [InstalledModRoles.ENABLED, InstalledModRoles.MOD])
+        return True
+
+    def mod_at(self, row: int) -> InstalledMod:
+        return self._mods[row]
+
+    @property
+    def mods(self) -> tuple[InstalledMod, ...]:
+        return tuple(self._mods)
