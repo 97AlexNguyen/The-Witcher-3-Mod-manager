@@ -91,6 +91,7 @@ class ModCard(QFrame):
     move_requested = pyqtSignal(object, str)      # -> InstalledMod, target category key
     remove_requested = pyqtSignal(object)         # -> InstalledMod
     details_requested = pyqtSignal(object)        # -> InstalledMod
+    selection_requested = pyqtSignal(object)      # -> InstalledMod
 
     def __init__(
         self,
@@ -112,6 +113,7 @@ class ModCard(QFrame):
         self.setFixedSize(GROUP_CARD_WIDTH, GROUP_CARD_HEIGHT)
         self.setCursor(Qt.CursorShape.OpenHandCursor)
         self.setProperty("modEnabled", "true" if mod.enabled else "false")
+        self.setProperty("selected", "false")
         self.setToolTip(f"{mod.name}\n\nDrag onto another box to recategorize · double-click for details")
 
         outer = QVBoxLayout(self)
@@ -312,6 +314,22 @@ class ModCard(QFrame):
 
     def cancel_pending_drag(self) -> None:
         self._press_pos = None
+
+    def set_selected(self, selected: bool) -> None:
+        value = "true" if selected else "false"
+        if self.property("selected") == value:
+            return
+        self.setProperty("selected", value)
+        self.style().unpolish(self)
+        self.style().polish(self)
+
+    def mouseReleaseEvent(self, event: QMouseEvent) -> None:  # noqa: N802
+        if event.button() == Qt.MouseButton.LeftButton and self._press_pos is not None:
+            moved = (event.position().toPoint() - self._press_pos).manhattanLength()
+            self._press_pos = None
+            if moved < QApplication.startDragDistance():
+                self.selection_requested.emit(self.mod)
+        super().mouseReleaseEvent(event)
 
     def mouseDoubleClickEvent(self, event: QMouseEvent) -> None:  # noqa: N802
         if event.button() == Qt.MouseButton.LeftButton:

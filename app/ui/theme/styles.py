@@ -88,7 +88,11 @@ QScrollArea#boxScroll > QWidget > QWidget {{ background: transparent; }}
 QLabel#boxStats {{ color: {c.on_surface_variant}; background: {c.surface_lowest}; border-radius: 10px; padding: 2px 10px; }}
 QLabel#boxTileAttention {{ color: {COLOR_WARNING}; font-weight: 600; }}
 QToolButton#boxDragHandle, QToolButton#boxCollapseButton, QToolButton#boxResizeHandle {{ background: transparent; color: {c.on_surface_variant}; border: 1px solid transparent; border-radius: {RADIUS_DEFAULT}px; font-size: 16px; }}
+QToolButton#boxColorButton {{ background: transparent; border: 1px solid transparent; border-radius: {RADIUS_DEFAULT}px; font-size: 18px; }}
 QToolButton#boxDragHandle:hover, QToolButton#boxCollapseButton:hover, QToolButton#boxResizeHandle:hover {{ background: {c.surface_high}; color: {c.on_surface}; border-color: {c.outline_variant}; }}
+QToolButton#boxColorButton:hover {{ background: {c.surface_high}; border-color: {c.outline_variant}; }}
+QToolButton#boxColorButton:pressed {{ background: {c.primary_fixed}; }}
+QToolButton#boxColorButton:focus {{ border: 1px solid {c.primary}; }}
 QToolButton#boxDragHandle:pressed, QToolButton#boxCollapseButton:pressed, QToolButton#boxResizeHandle:pressed {{ background: {c.primary_fixed}; color: {c.primary}; }}
 QToolButton#boxDragHandle:focus, QToolButton#boxCollapseButton:focus, QToolButton#boxResizeHandle:focus {{ border: 1px solid {c.primary}; }}
 QToolButton#boxDragHandle:disabled, QToolButton#boxCollapseButton:disabled, QToolButton#boxResizeHandle:disabled {{ color: {c.outline_variant}; }}
@@ -96,6 +100,7 @@ QSplitter#boxGrid::handle, QSplitter[objectName^="boxRow"]::handle {{ background
 QSplitter#boxGrid::handle:hover, QSplitter[objectName^="boxRow"]::handle:hover {{ background: {c.primary}; }}
 QFrame#modCard {{ background: {c.surface_low}; border: 1px solid {c.outline_variant}; border-radius: {RADIUS_MD}px; }}
 QFrame#modCard:hover {{ border-color: {c.outline}; }}
+QFrame#modCard[selected="true"] {{ border: 2px solid {c.primary}; background: {c.primary_fixed}; }}
 QLabel#modCardName {{ color: {c.on_surface}; }}
 QFrame#modCard[modEnabled="false"] QLabel#modCardName {{ color: {c.on_surface_variant}; }}
 QToolButton#modToggle {{ background: {c.surface_high}; color: {c.on_surface_variant}; border: 1px solid {c.outline_variant}; border-radius: 11px; font-size: 9px; font-weight: 700; }}

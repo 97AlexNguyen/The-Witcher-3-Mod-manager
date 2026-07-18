@@ -1,8 +1,9 @@
 from __future__ import annotations
 
 from PyQt6.QtCore import QPoint, QPointF, QRect, QSize, Qt, pyqtSignal
-from PyQt6.QtGui import QFont, QMouseEvent, QResizeEvent
+from PyQt6.QtGui import QColor, QFont, QMouseEvent, QResizeEvent
 from PyQt6.QtWidgets import (
+    QColorDialog,
     QFrame,
     QHBoxLayout,
     QLabel,
@@ -93,6 +94,7 @@ class CategoryBox(ModDropTargetMixin, QFrame):
     mod_moved = pyqtSignal(object, str)
     mod_removed = pyqtSignal(object)
     mod_details = pyqtSignal(object)
+    mod_selected = pyqtSignal(object)
     collapsed_changed = pyqtSignal(str, bool)
     geometry_changed = pyqtSignal(str, QRect)
 
@@ -114,6 +116,8 @@ class CategoryBox(ModDropTargetMixin, QFrame):
         self._mods: list[InstalledMod] = []
         self._search = ""
         self._collapsed = False
+        self._selected_mod_identity: str | None = None
+        self._custom_color: QColor | None = None
         self._expanded_size = QSize(BOX_DEFAULT_WIDTH, BOX_DEFAULT_HEIGHT)
 
         self.setObjectName("categoryBox")
@@ -133,10 +137,15 @@ class CategoryBox(ModDropTargetMixin, QFrame):
         self.drag_handle = BoxDragHandle(category.key, self, self)
         header.addWidget(self.drag_handle)
 
-        dot = QLabel()
-        dot.setFixedSize(12, 12)
-        dot.setStyleSheet(f"background: {self._accent}; border-radius: 6px;")
-        header.addWidget(dot, 0, Qt.AlignmentFlag.AlignVCenter)
+        self.color_button = QToolButton()
+        self.color_button.setObjectName("boxColorButton")
+        self.color_button.setText("●")
+        self.color_button.setToolTip("Customize this box color (alpha supported)")
+        self.color_button.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.color_button.setFixedSize(28, 28)
+        self.color_button.clicked.connect(self._choose_color)
+        header.addWidget(self.color_button, 0, Qt.AlignmentFlag.AlignVCenter)
+        self._update_color_button()
 
         name_font = QFont()
         name_font.setPointSize(TYPO_HEADLINE_SM[0])
@@ -201,6 +210,62 @@ class CategoryBox(ModDropTargetMixin, QFrame):
     @property
     def is_collapsed(self) -> bool:
         return self._collapsed
+
+    @property
+    def custom_color(self) -> QColor | None:
+        return QColor(self._custom_color) if self._custom_color is not None else None
+
+    def set_custom_color(self, color: QColor) -> None:
+        if not color.isValid():
+            return
+        self._custom_color = QColor(color)
+        red, green, blue, alpha = color.red(), color.green(), color.blue(), color.alpha()
+        self.setStyleSheet(
+            f"QFrame#categoryBox {{ background-color: rgba({red}, {green}, {blue}, {alpha}); }}"
+        )
+        self._update_color_button()
+
+    def _dialog_parent(self) -> "QWidget | None":
+        """Return a real top-level parent for modal dialogs.
+
+        This box is embedded in a QGraphicsScene via a QGraphicsProxyWidget, so
+        parenting a dialog to ``self`` makes Qt render one copy inside the scene
+        and pop a second, mispositioned native window. Parent to the view's
+        window instead so the dialog behaves as a normal top-level window.
+        """
+        proxy = self.graphicsProxyWidget()
+        scene = proxy.scene() if proxy is not None else None
+        if scene is not None:
+            views = scene.views()
+            if views:
+                return views[0].window()
+        return self.window()
+
+    def _choose_color(self) -> None:
+        initial = self.custom_color or QColor(self._accent)
+        if self._custom_color is None:
+            initial.setAlpha(72)
+        color = QColorDialog.getColor(
+            initial,
+            self._dialog_parent(),
+            f"Choose color for {self.category.name}",
+            QColorDialog.ColorDialogOption.ShowAlphaChannel,
+        )
+        if color.isValid():
+            self.set_custom_color(color)
+
+    def _update_color_button(self) -> None:
+        color = self._custom_color or QColor(self._accent)
+        self.color_button.setStyleSheet(
+            f"QToolButton#boxColorButton {{ color: {color.name()}; }}"
+        )
+
+    def set_selected_mod(self, identity: str | None) -> None:
+        self._selected_mod_identity = identity
+        for index in range(self.flow.count()):
+            card = self.flow.itemAt(index).widget()
+            if isinstance(card, ModCard):
+                card.set_selected(card.mod.identity == identity)
 
     def persistent_geometry(self) -> QRect:
         """Return the expanded geometry even while the box is collapsed."""
@@ -321,6 +386,8 @@ class CategoryBox(ModDropTargetMixin, QFrame):
             card.move_requested.connect(self.mod_moved)
             card.remove_requested.connect(self.mod_removed)
             card.details_requested.connect(self.mod_details)
+            card.selection_requested.connect(self.mod_selected)
+            card.set_selected(mod.identity == self._selected_mod_identity)
             self.flow.addWidget(card)
 
     def _on_card_enabled(self, mod: InstalledMod) -> None:

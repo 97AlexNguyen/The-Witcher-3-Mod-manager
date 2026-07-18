@@ -378,7 +378,12 @@ class ModBoxWorkspace(QGraphicsView):
                     target.mod_dropped.emit(identity, target.category.key)
                 event.accept()
                 return
+            source = self._card_drag_source
             self._card_drag_source = None
+            source.cancel_pending_drag()
+            source.selection_requested.emit(source.mod)
+            event.accept()
+            return
         super().mouseReleaseEvent(event)
 
     def _begin_card_drag(self, viewport_position: QPoint) -> None:

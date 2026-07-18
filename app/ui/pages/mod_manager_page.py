@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from PyQt6.QtCore import QByteArray, QPointF, QRect, QSettings, Qt, QTimer, pyqtSignal
-from PyQt6.QtGui import QDragEnterEvent, QDropEvent
+from PyQt6.QtGui import QColor, QDragEnterEvent, QDropEvent
 from PyQt6.QtWidgets import (
     QHBoxLayout,
     QLabel,
@@ -86,6 +86,7 @@ class ModManagerPage(QWidget):
             box.mod_moved.connect(self._set_mod_category)
             box.mod_removed.connect(self._request_remove)
             box.mod_details.connect(self._show_details)
+            box.mod_selected.connect(self._show_details)
             box.collapsed_changed.connect(self._on_box_collapsed)
             self.boxes[category.key] = box
             self.box_workspace.add_box(box)
@@ -122,6 +123,11 @@ class ModManagerPage(QWidget):
             geometry = self._settings.value(f"mod_manager/box_geometry/{key}")
             if isinstance(geometry, QRect):
                 self.box_workspace.set_box_geometry(key, geometry)
+            color_value = self._settings.value(f"mod_manager/box_color/{key}")
+            if isinstance(color_value, str):
+                color = QColor(color_value)
+                if color.isValid():
+                    self.boxes[key].set_custom_color(color)
 
         collapsed = self._settings.value("mod_manager/collapsed_boxes", [])
         if isinstance(collapsed, str):
@@ -152,12 +158,6 @@ class ModManagerPage(QWidget):
                 return mod
         return None
 
-    def _category_name(self, category_key: str) -> str:
-        for category in self._categories:
-            if category.key == category_key:
-                return category.name
-        return category_key
-
     def _refresh_boxes(self, rebuild_body: bool) -> None:
         for key, box in self.boxes.items():
             box.set_mods(self._mods_in(key), rebuild_body=rebuild_body)
@@ -173,7 +173,6 @@ class ModManagerPage(QWidget):
         if mod.category_key == category_key:
             return
         self.mod_model.set_category(mod, category_key)  # emits dataChanged -> refresh
-        self._show_notice(f"'{mod.name}' moved to {self._category_name(category_key)}.")
 
     def _on_mod_enabled(self, mod: InstalledMod) -> None:
         row = self.mod_model.row_for(mod)
@@ -187,13 +186,14 @@ class ModManagerPage(QWidget):
         self._show_notice(f"Removing '{mod.name}' will be connected in a later phase.")
 
     def _show_details(self, mod: InstalledMod) -> None:
+        for box in self.boxes.values():
+            box.set_selected_mod(mod.identity)
         self.detail_panel.show_selection([mod])
         # Make sure the detail pane is visible if the user had collapsed it.
         sizes = self.splitter.sizes()
         if len(sizes) == 2 and sizes[1] == 0:
             total = sum(sizes) or 1000
             self.splitter.setSizes([int(total * 0.72), int(total * 0.28)])
-        self.detail_panel.setFocus()
 
     # -- model reactions --------------------------------------------------- #
 
@@ -278,6 +278,12 @@ class ModManagerPage(QWidget):
         self._settings.setValue("mod_manager/canvas_center", self.box_workspace.camera_center())
         for key, box in self.boxes.items():
             self._settings.setValue(f"mod_manager/box_geometry/{key}", box.persistent_geometry())
+            color = box.custom_color
+            if color is not None:
+                self._settings.setValue(
+                    f"mod_manager/box_color/{key}",
+                    color.name(QColor.NameFormat.HexArgb),
+                )
         self._settings.setValue(
             "mod_manager/collapsed_boxes",
             [key for key, box in self.boxes.items() if box.is_collapsed],

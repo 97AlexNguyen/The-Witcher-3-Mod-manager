@@ -4,7 +4,7 @@ import unittest
 from dataclasses import replace
 
 from PyQt6.QtCore import QEvent, QMimeData, QPoint, QPointF, QRect, QSettings, Qt, QUrl
-from PyQt6.QtGui import QDropEvent, QFont, QFontMetrics, QMouseEvent
+from PyQt6.QtGui import QColor, QDropEvent, QFont, QFontMetrics, QMouseEvent
 from PyQt6.QtTest import QTest
 from PyQt6.QtWidgets import QApplication
 
@@ -286,8 +286,7 @@ class ModManagerPageTests(unittest.TestCase):
         self.assertEqual(page.boxes["graphics"].flow.count(), 2)
         self.assertIn("1 mod", page.boxes["gameplay"].stats_label.text())
         self.assertIn("2 mods", page.boxes["graphics"].stats_label.text())
-        self.assertTrue(page.notice_label.isVisible())
-        self.assertIn("moved to Graphics", page.notice_label.text())
+        self.assertFalse(page.notice_label.isVisible())
         self.tearDownPage(page, settings)
 
     def test_dragging_a_card_between_canvas_boxes_recategorizes_it(self) -> None:
@@ -399,14 +398,40 @@ class ModManagerPageTests(unittest.TestCase):
         self.assertEqual(box.flow.count(), 1)
         self.tearDownPage(page, settings)
 
-    def test_double_click_drives_the_detail_panel(self) -> None:
+    def test_single_click_selection_drives_the_detail_panel(self) -> None:
         page, settings = self.make_page("details")
         card = page.boxes["interface"].flow.itemAt(0).widget()
-        card.details_requested.emit(card.mod)
+        box = page.boxes["interface"]
+        card_local = card.mapTo(box, card.rect().center())
+        scene_position = box.graphicsProxyWidget().mapToScene(QPointF(card_local))
+        viewport_position = page.box_workspace.mapFromScene(scene_position)
+        QTest.mouseClick(
+            page.box_workspace.viewport(),
+            Qt.MouseButton.LeftButton,
+            Qt.KeyboardModifier.NoModifier,
+            viewport_position,
+        )
         self.app.processEvents()
         self.assertIs(page.detail_panel.current_mod, card.mod)
         self.assertEqual(page.detail_panel.name_label.text(), card.mod.name)
+        self.assertEqual(card.property("selected"), "true")
         self.tearDownPage(page, settings)
+
+    def test_each_box_color_with_alpha_round_trips(self) -> None:
+        page, settings = self.make_page("box-color")
+        expected = QColor(32, 96, 160, 88)
+        page.boxes["graphics"].set_custom_color(expected)
+        page.save_state()
+        page.close()
+
+        page2 = ModManagerPage(settings)
+        page2.show()
+        self.app.processEvents()
+        actual = page2.boxes["graphics"].custom_color
+        self.assertIsNotNone(actual)
+        self.assertEqual(actual.rgba(), expected.rgba())
+        page2.close()
+        settings.clear()
 
     def test_detail_category_combo_recategorizes_through_the_model(self) -> None:
         page, settings = self.make_page("detail-cat")
