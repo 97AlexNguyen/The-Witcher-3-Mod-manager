@@ -12,10 +12,14 @@ from app.domain import Category
 PALETTE = ("blue", "violet", "teal", "amber")
 
 _CATALOG_RESOURCE = "nexus_categories.json"
+ADULT_CONTENT_CATEGORY_NAME = "Adult Content"
+UNCATEGORIZED_CATEGORY_NAME = "Uncategorized"
 
 # Synthetic home for mods that carry no category. It is not part of the Nexus
 # taxonomy, so it is appended rather than read from the bundle.
-_UNCATEGORIZED = Category("uncategorized", "Uncategorized", "amber", built_in=True)
+_UNCATEGORIZED = Category(
+    "uncategorized", UNCATEGORIZED_CATEGORY_NAME, "amber", built_in=True
+)
 
 
 def slugify(name: str) -> str:
@@ -65,3 +69,21 @@ def nexus_category_name(category_id: int | None) -> str | None:
             name = entry.get("name")
             return name if isinstance(name, str) else None
     return None
+
+
+def preferred_install_category_name(
+    nexus_category: str | None,
+    *,
+    contains_adult_content: bool,
+) -> str:
+    """Choose the app category for verified Nexus metadata.
+
+    Adult content deliberately overrides Nexus's normal taxonomy so users can
+    find, disable, or move all such mods as one group. Missing Nexus taxonomy
+    data falls back to the permanent Uncategorized category.
+    """
+    if contains_adult_content:
+        return ADULT_CONTENT_CATEGORY_NAME
+    if isinstance(nexus_category, str) and nexus_category.strip():
+        return nexus_category.strip()
+    return UNCATEGORIZED_CATEGORY_NAME

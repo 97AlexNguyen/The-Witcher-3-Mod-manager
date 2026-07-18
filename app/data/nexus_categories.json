@@ -35,6 +35,7 @@
     { "category_id": 35, "name": "Audio", "parent_category": 1 },
     { "category_id": 40, "name": "Performance", "parent_category": 1 },
     { "category_id": 41, "name": "Hair and Face", "parent_category": 1 },
-    { "category_id": 42, "name": "Quests and Adventures", "parent_category": 1 }
+    { "category_id": 42, "name": "Quests and Adventures", "parent_category": 1 },
+    { "category_id": 99, "name": "Adult Content", "parent_category": 1 }
   ]
 }

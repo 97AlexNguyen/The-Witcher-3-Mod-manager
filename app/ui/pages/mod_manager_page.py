@@ -7,7 +7,6 @@ from PyQt6.QtGui import QColor, QDragEnterEvent, QDropEvent
 from PyQt6.QtWidgets import (
     QFileDialog,
     QHBoxLayout,
-    QInputDialog,
     QLabel,
     QSplitter,
     QVBoxLayout,
@@ -15,7 +14,13 @@ from PyQt6.QtWidgets import (
 )
 
 from app.config import CheckLevel, load_config, validate_game_path
-from app.data import palette_color_key, slugify
+from app.apis.nexus_metadata import NexusLookupError, lookup_archive_metadata
+from app.data import (
+    UNCATEGORIZED_CATEGORY_NAME,
+    palette_color_key,
+    preferred_install_category_name,
+    slugify,
+)
 from app.domain import Category, InstalledMod
 from app.install import InstallError, install_archive
 from app.manifest import Manifest, ManifestStore
@@ -26,10 +31,12 @@ from app.ui.widgets import CategoryBox, ModBoxWorkspace, ModDetailPanel
 
 # Categories are derived from the installed mods, not a fixed list. A category
 # box exists exactly when at least one mod is filed under it — installing a mod
-# creates its category (the user picks or names one), and moving the last mod
+# creates the category selected from Nexus metadata, and moving the last mod
 # out of a category removes it. "Uncategorized" is the one permanent home that
 # always exists, even when empty, so a mod always has somewhere to land.
-UNCATEGORIZED = Category("uncategorized", "Uncategorized", "amber", built_in=True)
+UNCATEGORIZED = Category(
+    "uncategorized", UNCATEGORIZED_CATEGORY_NAME, "amber", built_in=True
+)
 
 
 class ModManagerPage(QWidget):
@@ -432,9 +439,11 @@ class ModManagerPage(QWidget):
         step. Game-config merges are deliberately not performed here yet, so a
         mod with config needs installs its files but leaves those merges pending.
 
-        The mods are filed under ``category_key``; when it is ``None`` the user
-        is asked to pick an existing category or name a new one (which is created
-        on the spot). Passing a key skips the prompt (used by tests).
+        With no explicit ``category_key``, each archive is filed automatically
+        from its verified Nexus metadata. Adult content always goes to the
+        dedicated Adult Content category, ahead of Nexus's normal taxonomy.
+        Passing a key remains available for callers that intentionally override
+        automatic categorisation.
         """
         if not self._store.can_write:
             self._show_notice(
@@ -450,42 +459,40 @@ class ModManagerPage(QWidget):
             )
             return
 
-        if category_key is None:
-            category_key = self._prompt_install_category()
-            if category_key is None:  # cancelled
-                return
-
         installed: list[str] = []
         failures: list[str] = []
+        warnings: list[str] = []
         for path in paths:
+            resolved_category_key = category_key
+            category_name: str | None = None
+            if resolved_category_key is None:
+                try:
+                    metadata = lookup_archive_metadata(Path(path).name)
+                except NexusLookupError as exc:
+                    category_name = UNCATEGORIZED.name
+                    warnings.append(
+                        f"{Path(path).name}: Nexus metadata unavailable ({exc}); "
+                        f"filed under {UNCATEGORIZED.name}"
+                    )
+                else:
+                    category_name = preferred_install_category_name(
+                        metadata.category_name,
+                        contains_adult_content=metadata.contains_adult_content,
+                    )
+
             try:
                 result = install_archive(path, config.game_path, config.vault_path)
             except (InstallError, OSError) as exc:
                 failures.append(f"{Path(path).name}: {exc}")
                 continue
-            self._register_installed_mod(result.mod, category_key)
+            if resolved_category_key is None:
+                resolved_category_key = self._resolve_category_name(
+                    category_name or UNCATEGORIZED.name
+                )
+            self._register_installed_mod(result.mod, resolved_category_key)
             installed.append(result.mod.name)
 
-        self._report_install(installed, failures)
-
-    def _prompt_install_category(self) -> str | None:
-        """Ask which category to install into, offering existing categories and
-        letting the user type a new name. Returns a category key or ``None`` if
-        cancelled."""
-        names = [category.name for category in self._ordered_active_categories()]
-        default_index = names.index(UNCATEGORIZED.name) if UNCATEGORIZED.name in names else 0
-        name, ok = QInputDialog.getItem(
-            self,
-            "Install into category",
-            "Choose an existing category or type a new one:",
-            names,
-            default_index,
-            True,  # editable
-        )
-        if not ok:
-            return None
-        name = name.strip() or UNCATEGORIZED.name
-        return self._resolve_category_name(name)
+        self._report_install(installed, failures, warnings)
 
     def _resolve_category_name(self, name: str) -> str:
         """Map a category name to a key, creating a new category if needed."""
@@ -520,7 +527,12 @@ class ModManagerPage(QWidget):
             suffix += 1
         return key
 
-    def _report_install(self, installed: list[str], failures: list[str]) -> None:
+    def _report_install(
+        self,
+        installed: list[str],
+        failures: list[str],
+        warnings: list[str] | None = None,
+    ) -> None:
         parts: list[str] = []
         if installed:
             parts.append(
@@ -529,6 +541,8 @@ class ModManagerPage(QWidget):
             )
         if failures:
             parts.append("Failed: " + "; ".join(failures))
+        if warnings:
+            parts.append("Warnings: " + "; ".join(warnings))
         if not parts:
             parts.append("No mods were installed.")
         self._show_notice("  ·  ".join(parts))
