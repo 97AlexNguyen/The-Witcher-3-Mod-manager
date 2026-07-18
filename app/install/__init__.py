@@ -4,6 +4,7 @@ from app.install.errors import (
     GamePathError,
     InstallError,
     RarToolMissingError,
+    UninstallError,
     UnsupportedArchiveError,
 )
 from app.install.extract import SUPPORTED_SUFFIXES, extract_archive
@@ -14,6 +15,7 @@ from app.install.installer import (
 )
 from app.install.package import Bundle, BundleKind, ModPackage
 from app.install.scanner import parse_archive_name, scan_package
+from app.install.uninstaller import UninstallResult, uninstall_mod
 
 __all__ = [
     "ArchiveError",
@@ -27,9 +29,12 @@ __all__ = [
     "RarToolMissingError",
     "SUPPORTED_SUFFIXES",
     "UnsupportedArchiveError",
+    "UninstallError",
+    "UninstallResult",
     "extract_archive",
     "install_archive",
     "install_package",
     "parse_archive_name",
     "scan_package",
+    "uninstall_mod",
 ]

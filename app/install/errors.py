@@ -32,3 +32,22 @@ class EmptyPackageError(InstallError):
 
 class GamePathError(InstallError):
     """The configured game path is missing or does not look like an install."""
+
+
+class UninstallError(InstallError):
+    """One or more tracked content folders could not be removed.
+
+    ``removed_paths`` lets callers explain that the uninstall was partial while
+    keeping the manifest record available for a safe retry.
+    """
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        removed_paths: tuple[str, ...] = (),
+        failed_paths: tuple[str, ...] = (),
+    ) -> None:
+        super().__init__(message)
+        self.removed_paths = removed_paths
+        self.failed_paths = failed_paths

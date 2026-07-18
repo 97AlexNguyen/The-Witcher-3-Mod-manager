@@ -64,6 +64,16 @@ class InstalledModListModel(QAbstractListModel):
         self._mods.append(mod)
         self.endInsertRows()
 
+    def remove_mod(self, mod: InstalledMod) -> bool:
+        """Remove exactly this model object and notify every attached view."""
+        row = self.row_for(mod)
+        if row < 0:
+            return False
+        self.beginRemoveRows(QModelIndex(), row, row)
+        del self._mods[row]
+        self.endRemoveRows()
+        return True
+
     def has_identity(self, identity: str) -> bool:
         return any(mod.identity == identity for mod in self._mods)
 

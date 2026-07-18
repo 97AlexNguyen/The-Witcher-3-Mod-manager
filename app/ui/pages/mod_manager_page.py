@@ -10,6 +10,7 @@ from PyQt6.QtWidgets import (
     QInputDialog,
     QLabel,
     QMenu,
+    QMessageBox,
     QSplitter,
     QVBoxLayout,
     QWidget,
@@ -24,7 +25,7 @@ from app.data import (
     slugify,
 )
 from app.domain import Category, InstalledMod
-from app.install import InstallError, install_archive
+from app.install import InstallError, UninstallError, install_archive, uninstall_mod
 from app.manifest import Manifest, ManifestStore
 from app.ui.models import InstalledModListModel, InstalledModRoles
 from app.ui.services import ThumbnailProvider
@@ -411,8 +412,67 @@ class ModManagerPage(QWidget):
         self.mod_model.setData(index, mod.enabled, InstalledModRoles.ENABLED)
 
     def _request_remove(self, mod: InstalledMod) -> None:
-        # Removal un-merges a mod from game config; that flow is not wired yet.
-        self._show_notice(f"Removing '{mod.name}' will be connected in a later phase.")
+        if not self._store.can_write:
+            self._show_notice(
+                "Another instance is running — removals are disabled in read-only mode."
+            )
+            return
+
+        config = load_config()
+        game_check = validate_game_path(config.game_path)
+        if config.game_path is None or game_check.level is CheckLevel.ERROR:
+            self._show_notice(
+                "Set a valid game folder in Settings before removing mods."
+            )
+            return
+
+        dialog = QMessageBox(self)
+        dialog.setIcon(QMessageBox.Icon.Warning)
+        dialog.setWindowTitle("Remove mod")
+        dialog.setText(f"Remove '{mod.name}' from the game?")
+        dialog.setInformativeText(
+            "Its tracked Mods/DLC folders will be deleted. "
+            "The vaulted source archive will be kept for reinstall."
+        )
+        dialog.setStandardButtons(
+            QMessageBox.StandardButton.Cancel | QMessageBox.StandardButton.Yes
+        )
+        dialog.setDefaultButton(QMessageBox.StandardButton.Cancel)
+        remove_button = dialog.button(QMessageBox.StandardButton.Yes)
+        remove_button.setText("Remove mod")
+        remove_button.setProperty("class", "danger")
+        remove_button.style().unpolish(remove_button)
+        remove_button.style().polish(remove_button)
+        if dialog.exec() != QMessageBox.StandardButton.Yes:
+            return
+
+        try:
+            result = uninstall_mod(mod, config.game_path, self.mod_model.mods)
+        except (UninstallError, OSError) as exc:
+            self._show_notice(
+                f"Could not fully remove '{mod.name}': {exc}. "
+                "Its manifest record was kept so you can retry."
+            )
+            return
+
+        if self.detail_panel.current_mod is mod:
+            self.detail_panel.show_selection([])
+        if not self.mod_model.remove_mod(mod):
+            self._show_notice(
+                f"Removed '{mod.name}' from disk, but its manifest record was not found."
+            )
+            return
+
+        # Disk removal and manifest removal form one user action. Persist now so
+        # a quick app exit cannot resurrect the removed card from stale data.
+        self._manifest_save_timer.stop()
+        self._persist_manifest()
+
+        detail = "Vault archive kept."
+        if result.shared_paths:
+            count = len(result.shared_paths)
+            detail += f" Kept {count} folder{'s' if count != 1 else ''} shared with other mods."
+        self._show_notice(f"Removed '{mod.name}'. {detail}")
 
     def _show_details(self, mod: InstalledMod) -> None:
         for box in self.boxes.values():
