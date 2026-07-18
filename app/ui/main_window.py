@@ -4,6 +4,7 @@ from PyQt6.QtCore import QByteArray, QSettings, Qt
 from PyQt6.QtGui import QCloseEvent
 from PyQt6.QtWidgets import QFrame, QHBoxLayout, QLabel, QMainWindow, QPushButton, QVBoxLayout, QWidget
 
+from app.ui.dialogs import SettingsDialog
 from app.ui.pages import ModManagerPage
 from app.ui.theme import ThemeManager
 from app.ui.theme.tokens import SPACING_LG, SPACING_MD, SPACING_SM
@@ -54,7 +55,8 @@ class MainWindow(QMainWindow):
 
         install_button = QPushButton("+  INSTALL MOD")
         install_button.setProperty("class", "primary")
-        install_button.setToolTip("The install flow will be connected in a later phase")
+        install_button.setToolTip("Install a mod archive (.zip, .7z, .rar)")
+        install_button.clicked.connect(self._install_mod)
         header_layout.addWidget(install_button)
         self.theme_button = QPushButton("LIGHT MODE" if self._theme_manager.is_dark else "DARK MODE")
         self.theme_button.setProperty("class", "ghost")
@@ -62,7 +64,8 @@ class MainWindow(QMainWindow):
         self._theme_manager.theme_changed.connect(self._theme_changed)
         header_layout.addWidget(self.theme_button)
         settings_button = QPushButton("SETTINGS")
-        settings_button.setToolTip("Settings navigation will be connected when the app shell grows")
+        settings_button.setToolTip("Game folder, mod storage and Nexus account")
+        settings_button.clicked.connect(self._open_settings)
         header_layout.addWidget(settings_button)
         layout.addWidget(header)
 
@@ -73,6 +76,12 @@ class MainWindow(QMainWindow):
 
     def _theme_changed(self, dark: bool) -> None:
         self.theme_button.setText("LIGHT MODE" if dark else "DARK MODE")
+
+    def _install_mod(self) -> None:
+        self.mod_manager_page.prompt_install()
+
+    def _open_settings(self) -> None:
+        SettingsDialog(self).exec()
 
     def _restore_geometry(self) -> None:
         geometry = self._settings.value("window/geometry")

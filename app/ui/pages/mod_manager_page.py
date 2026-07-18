@@ -1,31 +1,35 @@
 from __future__ import annotations
 
-import json
+from pathlib import Path
 
-from PyQt6.QtCore import QByteArray, QPoint, QPointF, QRect, QSettings, Qt, QTimer, pyqtSignal
+from PyQt6.QtCore import QByteArray, QPointF, QRect, QSettings, Qt, QTimer, pyqtSignal
 from PyQt6.QtGui import QColor, QDragEnterEvent, QDropEvent
 from PyQt6.QtWidgets import (
+    QFileDialog,
     QHBoxLayout,
     QInputDialog,
     QLabel,
-    QMenu,
     QSplitter,
     QVBoxLayout,
     QWidget,
 )
 
-from app.data import (
-    load_category_catalog,
-    make_mock_categories,
-    make_mock_mods,
-    palette_color_key,
-    slugify,
-)
+from app.config import CheckLevel, load_config, validate_game_path
+from app.data import palette_color_key, slugify
 from app.domain import Category, InstalledMod
+from app.install import InstallError, install_archive
+from app.manifest import Manifest, ManifestStore
 from app.ui.models import InstalledModListModel, InstalledModRoles
 from app.ui.services import ThumbnailProvider
 from app.ui.theme.tokens import SPACING_LG, SPACING_MD, SPACING_SM
 from app.ui.widgets import CategoryBox, ModBoxWorkspace, ModDetailPanel
+
+# Categories are derived from the installed mods, not a fixed list. A category
+# box exists exactly when at least one mod is filed under it — installing a mod
+# creates its category (the user picks or names one), and moving the last mod
+# out of a category removes it. "Uncategorized" is the one permanent home that
+# always exists, even when empty, so a mod always has somewhere to land.
+UNCATEGORIZED = Category("uncategorized", "Uncategorized", "amber", built_in=True)
 
 
 class ModManagerPage(QWidget):
@@ -33,7 +37,16 @@ class ModManagerPage(QWidget):
 
     ARCHIVE_SUFFIXES = (".zip", ".7z", ".rar")
     NOTICE_TIMEOUT_MS = 6000
-    def __init__(self, settings: QSettings, theme_manager=None, parent=None) -> None:
+    MANIFEST_SAVE_DEBOUNCE_MS = 300
+
+    def __init__(
+        self,
+        settings: QSettings,
+        theme_manager=None,
+        parent=None,
+        *,
+        manifest_path=None,
+    ) -> None:
         super().__init__(parent)
         self.setObjectName("pageSurface")
         self.setAcceptDrops(True)
@@ -41,18 +54,28 @@ class ModManagerPage(QWidget):
         self._theme_manager = theme_manager
         self._dark_theme = bool(theme_manager.is_dark) if theme_manager is not None else True
 
-        self._categories = make_mock_categories()
-        # "all" is a filter concept from the old flat list; a box grid groups by real
-        # categories, so every mod lands in exactly one box.
-        self._box_categories = [c for c in self._categories if c.key != "all"]
-        # Full Nexus taxonomy the user can spawn boxes from; layout (which boxes
-        # exist) stays separate from this catalog of available categories.
-        self._catalog = load_category_catalog()
-        # Boxes created at runtime (from the catalog or custom) that must be
-        # recreated on the next launch — the startup mock set does not cover them.
-        self._extra_categories: list[Category] = []
-        self.mod_model = InstalledModListModel(make_mock_mods(), self)
+        # The manifest is the source of truth for installed mods. Take the write
+        # lock (a second instance stays read-only), then load — a fresh install
+        # starts empty (only the permanent Uncategorized box).
+        self._store = ManifestStore(manifest_path)
+        self._store.acquire()
+        self._readonly_warned = False
+        manifest = self._store.load(seed=self._seed_manifest)
+        self.mod_model = InstalledModListModel(list(manifest.mods), self)
         self.thumbnails = ThumbnailProvider()
+
+        # Metadata (name/colour) for every category that currently has a box.
+        # Rebuilt from the manifest and kept pruned to the active set.
+        self._registry: dict[str, Category] = self._build_registry(manifest.categories)
+        # Live lists the boxes and detail panel hold by reference; kept in sync
+        # with the active category set so their "move to" menus stay current.
+        self._categories: list[Category] = []
+        self._box_categories: list[Category] = []
+
+        self._manifest_save_timer = QTimer(self)
+        self._manifest_save_timer.setSingleShot(True)
+        self._manifest_save_timer.setInterval(self.MANIFEST_SAVE_DEBOUNCE_MS)
+        self._manifest_save_timer.timeout.connect(self._persist_manifest)
 
         self.boxes: dict[str, CategoryBox] = {}
 
@@ -63,7 +86,7 @@ class ModManagerPage(QWidget):
 
         self._build_ui()
         self._connect()
-        self._refresh_boxes(rebuild_body=True)
+        self._reconcile_boxes(rebuild_body=True)
         self._restore_state()
 
     # -- construction ------------------------------------------------------ #
@@ -95,10 +118,12 @@ class ModManagerPage(QWidget):
         layout.addWidget(self.notice_label)
 
         self.box_workspace = ModBoxWorkspace(self._dark_theme)
-        for category in list(self._box_categories):
-            self._install_box(category)
+        # Categories are mod-driven now; the "add empty group" affordance no
+        # longer fits the model, so hide it rather than let it spawn a box that
+        # would be pruned on the next reconcile.
+        self.box_workspace.add_group_button.hide()
 
-        self.detail_panel = ModDetailPanel(self._categories)
+        self.detail_panel = ModDetailPanel(self._box_categories)
         self.splitter = QSplitter(Qt.Orientation.Horizontal)
         self.splitter.setObjectName("modWorkspaceSplitter")
         self.splitter.setChildrenCollapsible(False)
@@ -128,18 +153,21 @@ class ModManagerPage(QWidget):
         return box
 
     def _connect(self) -> None:
-        self.box_workspace.context_menu_requested.connect(self._show_canvas_menu)
         self.detail_panel.category_changed.connect(self._set_mod_category)
         self.mod_model.dataChanged.connect(self._on_model_data_changed)
         self.mod_model.rowsInserted.connect(self._on_membership_changed)
         self.mod_model.rowsRemoved.connect(self._on_membership_changed)
         self.mod_model.modelReset.connect(self._on_membership_changed)
+        # Any change to mod state (toggle, recategorize, priority) persists to the
+        # manifest, debounced so a burst of edits coalesces into one atomic write.
+        self.mod_model.dataChanged.connect(self._schedule_manifest_save)
+        self.mod_model.rowsInserted.connect(self._schedule_manifest_save)
+        self.mod_model.rowsRemoved.connect(self._schedule_manifest_save)
+        self.mod_model.modelReset.connect(self._schedule_manifest_save)
         if self._theme_manager is not None:
             self._theme_manager.theme_changed.connect(self._on_theme_changed)
 
     def _restore_state(self) -> None:
-        self._restore_custom_boxes()
-
         state = self._settings.value("mod_manager/detail_splitter")
         if isinstance(state, QByteArray):
             self.splitter.restoreState(state)
@@ -172,91 +200,96 @@ class ModManagerPage(QWidget):
         else:
             QTimer.singleShot(0, self.box_workspace.reset_view)
 
-    def _restore_custom_boxes(self) -> None:
-        """Recreate boxes the user added in a previous session."""
-        raw = self._settings.value("mod_manager/custom_boxes")
-        if not isinstance(raw, str):
-            return
-        try:
-            payload = json.loads(raw)
-        except (TypeError, ValueError):
-            return
-        if not isinstance(payload, list):
-            return
-        for entry in payload:
-            if not isinstance(entry, dict):
+    # -- category registry ------------------------------------------------- #
+
+    def _build_registry(self, categories: list[Category]) -> dict[str, Category]:
+        """Seed category metadata from the manifest, always including the
+        permanent Uncategorized home. ``all`` is a filter concept, not a box."""
+        registry: dict[str, Category] = {UNCATEGORIZED.key: UNCATEGORIZED}
+        for category in categories:
+            if category.key == "all" or category.key == UNCATEGORIZED.key:
                 continue
-            key = entry.get("key")
-            if not isinstance(key, str) or key in self.boxes:
-                continue
-            name = entry.get("name") if isinstance(entry.get("name"), str) else key
-            color_key = entry.get("color_key") if isinstance(entry.get("color_key"), str) else "neutral"
-            category = Category(key, name, color_key)
-            self._register_category(category)
-            self._install_box(category)
+            registry[category.key] = category
+        return registry
 
-    def _persist_custom_boxes(self) -> None:
-        payload = [
-            {"key": c.key, "name": c.name, "color_key": c.color_key}
-            for c in self._extra_categories
-        ]
-        self._settings.setValue("mod_manager/custom_boxes", json.dumps(payload))
+    def _category_for(self, key: str) -> Category:
+        """Return category metadata for ``key``, synthesising it if a mod refers
+        to a category the registry has not seen (e.g. hand-edited manifest)."""
+        category = self._registry.get(key)
+        if category is None:
+            name = key.replace("-", " ").replace("_", " ").strip().title() or key
+            category = Category(key, name, palette_color_key(len(self._registry)))
+            self._registry[key] = category
+        return category
 
-    # -- group creation ---------------------------------------------------- #
+    def _active_category_keys(self) -> set[str]:
+        """Keys that should have a box: Uncategorized plus every category a mod
+        is currently filed under."""
+        keys = {UNCATEGORIZED.key}
+        keys.update(mod.category_key for mod in self.mod_model.mods)
+        return keys
 
-    def _show_canvas_menu(self, global_pos: QPoint, scene_pos: QPointF) -> None:
-        """Offer catalog categories (not yet placed) and a custom group option."""
-        menu = QMenu(self)
-        available = [c for c in self._catalog if c.key not in self.boxes]
-        if available:
-            add_menu = menu.addMenu("Add group")
-            for category in available:
-                action = add_menu.addAction(category.name)
-                action.triggered.connect(
-                    lambda _checked=False, c=category, p=scene_pos: self._add_group(c, p)
-                )
-        custom_action = menu.addAction("Custom group…")
-        custom_action.triggered.connect(
-            lambda _checked=False, p=scene_pos: self._create_custom_group(p)
+    def _ordered_active_categories(self) -> list[Category]:
+        """Active categories with Uncategorized first, then the rest by name."""
+        active = self._active_category_keys()
+        others = sorted(
+            (self._category_for(key) for key in active if key != UNCATEGORIZED.key),
+            key=lambda c: c.name.casefold(),
         )
-        menu.exec(global_pos)
+        return [self._category_for(UNCATEGORIZED.key), *others]
 
-    def _add_group(self, category: Category, position: QPointF) -> None:
-        if category.key in self.boxes:
+    def _sync_category_lists(self) -> None:
+        """Point the shared category lists at the active set and prune metadata
+        for categories that no longer have a box."""
+        active = self._ordered_active_categories()
+        active_keys = {category.key for category in active}
+        # Mutate in place: boxes and the detail panel hold these by reference.
+        self._box_categories[:] = active
+        self._categories[:] = active
+        self.detail_panel.set_categories(active)
+        for key in list(self._registry):
+            if key != UNCATEGORIZED.key and key not in active_keys:
+                del self._registry[key]
+
+    def _reconcile_boxes(self, rebuild_body: bool = True) -> None:
+        """Add boxes for newly-populated categories and drop boxes whose last
+        mod has left (Uncategorized is never dropped)."""
+        active_keys = self._active_category_keys()
+        for key in list(self.boxes):
+            if key not in active_keys:
+                self.boxes.pop(key, None)
+                self.box_workspace.remove_box(key)
+        self._sync_category_lists()
+        for category in self._ordered_active_categories():
+            if category.key not in self.boxes:
+                self._install_box(category)
+        self._refresh_boxes(rebuild_body=rebuild_body)
+
+    # -- manifest persistence --------------------------------------------- #
+
+    def _seed_manifest(self) -> Manifest:
+        """A fresh install starts empty: no mods, only the permanent
+        Uncategorized category."""
+        return Manifest(mods=[], categories=[UNCATEGORIZED])
+
+    def _current_manifest(self) -> Manifest:
+        return Manifest(
+            mods=list(self.mod_model.mods),
+            categories=self._ordered_active_categories(),
+        )
+
+    def _schedule_manifest_save(self, *_args) -> None:
+        self._manifest_save_timer.start()
+
+    def _persist_manifest(self) -> None:
+        if self._store.save(self._current_manifest()):
             return
-        self._register_category(category)
-        self._install_box(category, position)
-        # Rebuild bodies so every card's "move to" menu learns the new target.
-        self._refresh_boxes(rebuild_body=True)
-        self._persist_custom_boxes()
-
-    def _create_custom_group(self, position: QPointF) -> None:
-        name, ok = QInputDialog.getText(self, "New group", "Group name:")
-        if not ok:
-            return
-        name = name.strip()
-        if not name:
-            return
-        key = self._unique_key(slugify(name))
-        category = Category(key, name, palette_color_key(len(self.boxes)))
-        self._register_category(category)
-        self._install_box(category, position)
-        self._refresh_boxes(rebuild_body=True)
-        self._persist_custom_boxes()
-
-    def _register_category(self, category: Category) -> None:
-        """Track a runtime category so cards, dropdowns, and restore see it."""
-        self._extra_categories.append(category)
-        self._box_categories.append(category)
-        self._categories.append(category)
-
-    def _unique_key(self, base: str) -> str:
-        key = base
-        suffix = 2
-        while key in self.boxes:
-            key = f"{base}-{suffix}"
-            suffix += 1
-        return key
+        # Another instance holds the write lock; say so once, not on every edit.
+        if not self._readonly_warned:
+            self._readonly_warned = True
+            self._show_notice(
+                "Another instance is running — changes to your mod list won't be saved."
+            )
 
     # -- data helpers ------------------------------------------------------ #
 
@@ -283,7 +316,7 @@ class ModManagerPage(QWidget):
     def _set_mod_category(self, mod: InstalledMod, category_key: str) -> None:
         if mod.category_key == category_key:
             return
-        self.mod_model.set_category(mod, category_key)  # emits dataChanged -> refresh
+        self.mod_model.set_category(mod, category_key)  # emits dataChanged -> reconcile
 
     def _on_mod_enabled(self, mod: InstalledMod) -> None:
         row = self.mod_model.row_for(mod)
@@ -311,8 +344,12 @@ class ModManagerPage(QWidget):
     def _on_model_data_changed(self, top_left, bottom_right, roles=None) -> None:
         roles = roles or []
         membership_changed = (not roles) or (InstalledModRoles.CATEGORY_COLOR in roles)
-        # On an enable-only change, refresh headers only so the clicked card survives.
-        self._refresh_boxes(rebuild_body=membership_changed)
+        # A recategorize may have emptied a box or filled a new one, so reconcile;
+        # an enable-only change refreshes headers so the clicked card survives.
+        if membership_changed:
+            self._reconcile_boxes(rebuild_body=True)
+        else:
+            self._refresh_boxes(rebuild_body=False)
         # Keep the detail panel in step with whichever mod it is showing.
         mod = self.detail_panel.current_mod
         if mod is not None:
@@ -322,7 +359,7 @@ class ModManagerPage(QWidget):
                     break
 
     def _on_membership_changed(self, *_args) -> None:
-        self._refresh_boxes(rebuild_body=True)
+        self._reconcile_boxes(rebuild_body=True)
 
     def _on_theme_changed(self, dark: bool) -> None:
         self._dark_theme = dark
@@ -375,16 +412,137 @@ class ModManagerPage(QWidget):
             return
         event.acceptProposedAction()
         self.archives_dropped.emit(paths)
-        count = len(paths)
-        self._show_notice(
-            f"{count} archive{'s' if count != 1 else ''} received. "
-            "The install flow will be connected in a later phase."
+        self.install_archives(paths)
+
+    # -- install ----------------------------------------------------------- #
+
+    def prompt_install(self) -> None:
+        """Open a file picker and install the chosen archives (header button)."""
+        filter_str = "Mod archives (*.zip *.7z *.rar)"
+        paths, _ = QFileDialog.getOpenFileNames(
+            self, "Select mod archives", "", filter_str
         )
+        if paths:
+            self.install_archives(paths)
+
+    def install_archives(self, paths: list[str], category_key: str | None = None) -> None:
+        """Install each archive to disk and record it in the manifest.
+
+        Synchronous for now — extraction/merge threading is a separate roadmap
+        step. Game-config merges are deliberately not performed here yet, so a
+        mod with config needs installs its files but leaves those merges pending.
+
+        The mods are filed under ``category_key``; when it is ``None`` the user
+        is asked to pick an existing category or name a new one (which is created
+        on the spot). Passing a key skips the prompt (used by tests).
+        """
+        if not self._store.can_write:
+            self._show_notice(
+                "Another instance is running — installs are disabled in read-only mode."
+            )
+            return
+
+        config = load_config()
+        game_check = validate_game_path(config.game_path)
+        if config.game_path is None or game_check.level is CheckLevel.ERROR:
+            self._show_notice(
+                "Set a valid game folder in Settings before installing mods."
+            )
+            return
+
+        if category_key is None:
+            category_key = self._prompt_install_category()
+            if category_key is None:  # cancelled
+                return
+
+        installed: list[str] = []
+        failures: list[str] = []
+        for path in paths:
+            try:
+                result = install_archive(path, config.game_path, config.vault_path)
+            except (InstallError, OSError) as exc:
+                failures.append(f"{Path(path).name}: {exc}")
+                continue
+            self._register_installed_mod(result.mod, category_key)
+            installed.append(result.mod.name)
+
+        self._report_install(installed, failures)
+
+    def _prompt_install_category(self) -> str | None:
+        """Ask which category to install into, offering existing categories and
+        letting the user type a new name. Returns a category key or ``None`` if
+        cancelled."""
+        names = [category.name for category in self._ordered_active_categories()]
+        default_index = names.index(UNCATEGORIZED.name) if UNCATEGORIZED.name in names else 0
+        name, ok = QInputDialog.getItem(
+            self,
+            "Install into category",
+            "Choose an existing category or type a new one:",
+            names,
+            default_index,
+            True,  # editable
+        )
+        if not ok:
+            return None
+        name = name.strip() or UNCATEGORIZED.name
+        return self._resolve_category_name(name)
+
+    def _resolve_category_name(self, name: str) -> str:
+        """Map a category name to a key, creating a new category if needed."""
+        for category in self._registry.values():
+            if category.name.casefold() == name.casefold():
+                return category.key
+        key = self._unique_key(slugify(name))
+        self._registry[key] = Category(key, name, palette_color_key(len(self._registry)))
+        return key
+
+    def _register_installed_mod(self, mod: InstalledMod, category_key: str) -> None:
+        """Give the mod a unique identity, file it under ``category_key``, and add
+        it to the model (which triggers a reconcile so its box appears)."""
+        mod.identity = self._unique_identity(mod.identity)
+        mod.category_key = category_key
+        self._category_for(category_key)  # ensure metadata exists
+        self.mod_model.add_mod(mod)  # emits rowsInserted -> reconcile + manifest save
+
+    def _unique_identity(self, base: str) -> str:
+        identity = base or "mod"
+        suffix = 2
+        while self.mod_model.has_identity(identity):
+            identity = f"{base}-{suffix}"
+            suffix += 1
+        return identity
+
+    def _unique_key(self, base: str) -> str:
+        key = base or "category"
+        suffix = 2
+        while key in self._registry:
+            key = f"{base}-{suffix}"
+            suffix += 1
+        return key
+
+    def _report_install(self, installed: list[str], failures: list[str]) -> None:
+        parts: list[str] = []
+        if installed:
+            parts.append(
+                f"Installed {len(installed)} mod{'s' if len(installed) != 1 else ''}: "
+                + ", ".join(installed)
+            )
+        if failures:
+            parts.append("Failed: " + "; ".join(failures))
+        if not parts:
+            parts.append("No mods were installed.")
+        self._show_notice("  ·  ".join(parts))
 
     # -- persistence ------------------------------------------------------- #
 
     def save_state(self) -> None:
-        self._persist_custom_boxes()
+        # Flush any pending debounced manifest write before we lose the timer,
+        # then hand back the inter-process lock for the next instance.
+        if self._manifest_save_timer.isActive():
+            self._manifest_save_timer.stop()
+            self._persist_manifest()
+        self._store.release()
+
         self._settings.setValue("mod_manager/detail_splitter", self.splitter.saveState())
         self._settings.setValue("mod_manager/canvas_zoom", self.box_workspace.zoom_factor)
         self._settings.setValue("mod_manager/canvas_center", self.box_workspace.camera_center())

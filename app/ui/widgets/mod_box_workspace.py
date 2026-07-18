@@ -151,6 +151,17 @@ class ModBoxWorkspace(QGraphicsView):
         proxy.setPos(position)
         box.geometry_changed.connect(self._on_box_geometry_changed)
 
+    def remove_box(self, category_key: str) -> None:
+        """Remove a box from the canvas (its category no longer has any mods)."""
+        proxy = self._proxies.pop(category_key, None)
+        box = self._boxes.pop(category_key, None)
+        if proxy is not None:
+            self.scene().removeItem(proxy)
+            proxy.deleteLater()
+        if box is not None:
+            box.deleteLater()
+        self.scene().update()
+
     def box_count(self) -> int:
         return len(self._boxes)
 

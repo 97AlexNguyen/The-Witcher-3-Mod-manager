@@ -39,6 +39,20 @@ class ModDetailPanel(QFrame):
     def current_mod(self) -> InstalledMod | None:
         return self._mod
 
+    def set_categories(self, categories: list[Category]) -> None:
+        """Refresh the category dropdown when the active category set changes
+        (categories are created/removed as mods are installed and moved)."""
+        self._categories = [category for category in categories if category.key != "all"]
+        self._populate_categories()
+        if self._mod is not None:
+            self._sync_category_combo(self._mod)
+
+    def _populate_categories(self) -> None:
+        with QSignalBlocker(self.category_combo):
+            self.category_combo.clear()
+            for category in self._categories:
+                self.category_combo.addItem(category.name, category.key)
+
     def _build_ui(self) -> None:
         root = QVBoxLayout(self)
         root.setContentsMargins(SPACING_MD, SPACING_MD, SPACING_MD, SPACING_MD)
@@ -108,8 +122,7 @@ class ModDetailPanel(QFrame):
 
         layout.addWidget(self._field_label("CATEGORY"))
         self.category_combo = QComboBox()
-        for category in self._categories:
-            self.category_combo.addItem(category.name, category.key)
+        self._populate_categories()
         self.category_combo.currentIndexChanged.connect(self._category_edited)
         layout.addWidget(self.category_combo)
 
@@ -201,14 +214,17 @@ class ModDetailPanel(QFrame):
             f"Priority: {'Unassigned' if mod.priority is None else mod.priority}"
         )
         self.vault_label.setText(f"Vault: {mod.vault_path or 'Source archive unavailable'}")
-        with QSignalBlocker(self.category_combo):
-            index = self.category_combo.findData(mod.category_key)
-            self.category_combo.setCurrentIndex(max(0, index))
+        self._sync_category_combo(mod)
         self.section_labels[0].setText(self._format_groups(mod.content, "This mod writes no tracked content."))
         self.section_labels[1].setText(self._format_groups(mod.settings, "This mod adds no game settings."))
         self.section_labels[2].setText(self._format_groups(mod.keys, "This mod adds no key bindings."))
         self.section_labels[3].setText(mod.readme or "No readme was included in the source archive.")
         self.mode_stack.setCurrentWidget(self.detail_page)
+
+    def _sync_category_combo(self, mod: InstalledMod) -> None:
+        with QSignalBlocker(self.category_combo):
+            index = self.category_combo.findData(mod.category_key)
+            self.category_combo.setCurrentIndex(max(0, index))
 
     @staticmethod
     def _format_groups(groups: dict[str, tuple[str, ...]], empty_message: str) -> str:

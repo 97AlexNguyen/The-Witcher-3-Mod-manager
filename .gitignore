@@ -113,3 +113,5 @@ ENV/
 
 # PDM
 .pdm-python
+/tests
+/tests

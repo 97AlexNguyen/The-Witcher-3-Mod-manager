@@ -22,6 +22,7 @@ from app.ui.theme.tokens import (
     DARK,
     LIGHT,
     ThemeColors,
+    COLOR_SUCCESS,
     COLOR_DANGER,
     COLOR_WARNING,
 )
@@ -49,6 +50,12 @@ QLabel[class="headline-sm"] {{ font-family: '{heading_font}'; font-size: {TYPO_H
 QLabel[class="label-md"] {{ font-size: {TYPO_LABEL_MD[0]}px; font-weight: {TYPO_LABEL_MD[1]}; letter-spacing: 0.05em; color: {c.on_surface_variant}; }}
 QLabel[class="muted"] {{ color: {c.on_surface_variant}; }}
 QLabel[class="mono"] {{ font-family: '{FONT_MONO}'; }}
+QLabel[class="status-ok"] {{ color: {COLOR_SUCCESS}; font-size: {TYPO_BODY_SM[0]}px; }}
+QLabel[class="status-warn"] {{ color: {COLOR_WARNING}; font-size: {TYPO_BODY_SM[0]}px; }}
+QLabel[class="status-error"] {{ color: {COLOR_DANGER}; font-size: {TYPO_BODY_SM[0]}px; }}
+QLabel[class="status-muted"] {{ color: {c.on_surface_variant}; font-size: {TYPO_BODY_SM[0]}px; }}
+QDialog {{ background: {c.background}; }}
+QFrame#settingsSection {{ background: {c.surface_lowest}; border: 1px solid {c.outline_variant}; border-radius: {RADIUS_LG}px; }}
 QPushButton {{ min-height: 34px; padding: 0 {SPACING_MD}px; border: 1px solid {c.outline_variant}; border-radius: {RADIUS_DEFAULT}px; background: {c.surface_lowest}; font-size: {TYPO_LABEL_MD[0]}px; font-weight: {TYPO_LABEL_MD[1]}; }}
 QPushButton:hover {{ background: {c.surface_low}; border-color: {c.outline}; }}
 QPushButton:pressed {{ background: {c.surface_high}; }}

@@ -56,6 +56,17 @@ class InstalledModListModel(QAbstractListModel):
         self.dataChanged.emit(index, index, [InstalledModRoles.ENABLED, InstalledModRoles.MOD])
         return True
 
+    def add_mod(self, mod: InstalledMod) -> None:
+        """Append a freshly installed mod, emitting the insert signals so the
+        boxes and the debounced manifest save both react."""
+        row = len(self._mods)
+        self.beginInsertRows(QModelIndex(), row, row)
+        self._mods.append(mod)
+        self.endInsertRows()
+
+    def has_identity(self, identity: str) -> bool:
+        return any(mod.identity == identity for mod in self._mods)
+
     def mod_at(self, row: int) -> InstalledMod:
         return self._mods[row]
 
