@@ -1,17 +1,27 @@
 from __future__ import annotations
 
-from PyQt6.QtCore import QByteArray, QPointF, QRect, QSettings, Qt, QTimer, pyqtSignal
+import json
+
+from PyQt6.QtCore import QByteArray, QPoint, QPointF, QRect, QSettings, Qt, QTimer, pyqtSignal
 from PyQt6.QtGui import QColor, QDragEnterEvent, QDropEvent
 from PyQt6.QtWidgets import (
     QHBoxLayout,
+    QInputDialog,
     QLabel,
+    QMenu,
     QSplitter,
     QVBoxLayout,
     QWidget,
 )
 
-from app.data import make_mock_categories, make_mock_mods
-from app.domain import InstalledMod
+from app.data import (
+    load_category_catalog,
+    make_mock_categories,
+    make_mock_mods,
+    palette_color_key,
+    slugify,
+)
+from app.domain import Category, InstalledMod
 from app.ui.models import InstalledModListModel, InstalledModRoles
 from app.ui.services import ThumbnailProvider
 from app.ui.theme.tokens import SPACING_LG, SPACING_MD, SPACING_SM
@@ -35,6 +45,12 @@ class ModManagerPage(QWidget):
         # "all" is a filter concept from the old flat list; a box grid groups by real
         # categories, so every mod lands in exactly one box.
         self._box_categories = [c for c in self._categories if c.key != "all"]
+        # Full Nexus taxonomy the user can spawn boxes from; layout (which boxes
+        # exist) stays separate from this catalog of available categories.
+        self._catalog = load_category_catalog()
+        # Boxes created at runtime (from the catalog or custom) that must be
+        # recreated on the next launch — the startup mock set does not cover them.
+        self._extra_categories: list[Category] = []
         self.mod_model = InstalledModListModel(make_mock_mods(), self)
         self.thumbnails = ThumbnailProvider()
 
@@ -79,17 +95,8 @@ class ModManagerPage(QWidget):
         layout.addWidget(self.notice_label)
 
         self.box_workspace = ModBoxWorkspace(self._dark_theme)
-        for category in self._box_categories:
-            box = CategoryBox(category, self._box_categories, self.thumbnails, self._dark_theme)
-            box.mod_dropped.connect(self._on_mod_dropped)
-            box.mod_enabled.connect(self._on_mod_enabled)
-            box.mod_moved.connect(self._set_mod_category)
-            box.mod_removed.connect(self._request_remove)
-            box.mod_details.connect(self._show_details)
-            box.mod_selected.connect(self._show_details)
-            box.collapsed_changed.connect(self._on_box_collapsed)
-            self.boxes[category.key] = box
-            self.box_workspace.add_box(box)
+        for category in list(self._box_categories):
+            self._install_box(category)
 
         self.detail_panel = ModDetailPanel(self._categories)
         self.splitter = QSplitter(Qt.Orientation.Horizontal)
@@ -105,7 +112,23 @@ class ModManagerPage(QWidget):
         self.splitter.setSizes([1000, 340])
         layout.addWidget(self.splitter, 1)
 
+    def _install_box(self, category: Category, position: QPointF | None = None) -> CategoryBox:
+        """Create, wire, and place a box for ``category`` on the canvas."""
+        box = CategoryBox(category, self._box_categories, self.thumbnails, self._dark_theme)
+        box.mod_dropped.connect(self._on_mod_dropped)
+        box.mod_enabled.connect(self._on_mod_enabled)
+        box.mod_moved.connect(self._set_mod_category)
+        box.mod_removed.connect(self._request_remove)
+        box.mod_details.connect(self._show_details)
+        box.mod_selected.connect(self._show_details)
+        box.collapsed_changed.connect(self._on_box_collapsed)
+        self.boxes[category.key] = box
+        self.box_workspace.add_box(box, position)
+        box.set_mods(self._mods_in(category.key), rebuild_body=True)
+        return box
+
     def _connect(self) -> None:
+        self.box_workspace.context_menu_requested.connect(self._show_canvas_menu)
         self.detail_panel.category_changed.connect(self._set_mod_category)
         self.mod_model.dataChanged.connect(self._on_model_data_changed)
         self.mod_model.rowsInserted.connect(self._on_membership_changed)
@@ -115,6 +138,8 @@ class ModManagerPage(QWidget):
             self._theme_manager.theme_changed.connect(self._on_theme_changed)
 
     def _restore_state(self) -> None:
+        self._restore_custom_boxes()
+
         state = self._settings.value("mod_manager/detail_splitter")
         if isinstance(state, QByteArray):
             self.splitter.restoreState(state)
@@ -146,6 +171,92 @@ class ModManagerPage(QWidget):
             self.box_workspace.restore_view(zoom, center)
         else:
             QTimer.singleShot(0, self.box_workspace.reset_view)
+
+    def _restore_custom_boxes(self) -> None:
+        """Recreate boxes the user added in a previous session."""
+        raw = self._settings.value("mod_manager/custom_boxes")
+        if not isinstance(raw, str):
+            return
+        try:
+            payload = json.loads(raw)
+        except (TypeError, ValueError):
+            return
+        if not isinstance(payload, list):
+            return
+        for entry in payload:
+            if not isinstance(entry, dict):
+                continue
+            key = entry.get("key")
+            if not isinstance(key, str) or key in self.boxes:
+                continue
+            name = entry.get("name") if isinstance(entry.get("name"), str) else key
+            color_key = entry.get("color_key") if isinstance(entry.get("color_key"), str) else "neutral"
+            category = Category(key, name, color_key)
+            self._register_category(category)
+            self._install_box(category)
+
+    def _persist_custom_boxes(self) -> None:
+        payload = [
+            {"key": c.key, "name": c.name, "color_key": c.color_key}
+            for c in self._extra_categories
+        ]
+        self._settings.setValue("mod_manager/custom_boxes", json.dumps(payload))
+
+    # -- group creation ---------------------------------------------------- #
+
+    def _show_canvas_menu(self, global_pos: QPoint, scene_pos: QPointF) -> None:
+        """Offer catalog categories (not yet placed) and a custom group option."""
+        menu = QMenu(self)
+        available = [c for c in self._catalog if c.key not in self.boxes]
+        if available:
+            add_menu = menu.addMenu("Add group")
+            for category in available:
+                action = add_menu.addAction(category.name)
+                action.triggered.connect(
+                    lambda _checked=False, c=category, p=scene_pos: self._add_group(c, p)
+                )
+        custom_action = menu.addAction("Custom group…")
+        custom_action.triggered.connect(
+            lambda _checked=False, p=scene_pos: self._create_custom_group(p)
+        )
+        menu.exec(global_pos)
+
+    def _add_group(self, category: Category, position: QPointF) -> None:
+        if category.key in self.boxes:
+            return
+        self._register_category(category)
+        self._install_box(category, position)
+        # Rebuild bodies so every card's "move to" menu learns the new target.
+        self._refresh_boxes(rebuild_body=True)
+        self._persist_custom_boxes()
+
+    def _create_custom_group(self, position: QPointF) -> None:
+        name, ok = QInputDialog.getText(self, "New group", "Group name:")
+        if not ok:
+            return
+        name = name.strip()
+        if not name:
+            return
+        key = self._unique_key(slugify(name))
+        category = Category(key, name, palette_color_key(len(self.boxes)))
+        self._register_category(category)
+        self._install_box(category, position)
+        self._refresh_boxes(rebuild_body=True)
+        self._persist_custom_boxes()
+
+    def _register_category(self, category: Category) -> None:
+        """Track a runtime category so cards, dropdowns, and restore see it."""
+        self._extra_categories.append(category)
+        self._box_categories.append(category)
+        self._categories.append(category)
+
+    def _unique_key(self, base: str) -> str:
+        key = base
+        suffix = 2
+        while key in self.boxes:
+            key = f"{base}-{suffix}"
+            suffix += 1
+        return key
 
     # -- data helpers ------------------------------------------------------ #
 
@@ -273,6 +384,7 @@ class ModManagerPage(QWidget):
     # -- persistence ------------------------------------------------------- #
 
     def save_state(self) -> None:
+        self._persist_custom_boxes()
         self._settings.setValue("mod_manager/detail_splitter", self.splitter.saveState())
         self._settings.setValue("mod_manager/canvas_zoom", self.box_workspace.zoom_factor)
         self._settings.setValue("mod_manager/canvas_center", self.box_workspace.camera_center())

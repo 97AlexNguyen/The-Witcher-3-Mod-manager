@@ -3,6 +3,7 @@ from __future__ import annotations
 from PyQt6.QtCore import QPoint, QPointF, QRect, QSize, Qt, pyqtSignal
 from PyQt6.QtGui import QColor, QFont, QMouseEvent, QResizeEvent
 from PyQt6.QtWidgets import (
+    QAbstractButton,
     QColorDialog,
     QFrame,
     QHBoxLayout,
@@ -112,7 +113,10 @@ class CategoryBox(ModDropTargetMixin, QFrame):
         self._thumbnails = thumbnails
         self._dark_theme = dark_theme
         self._target_category_key = category.key
-        self._accent = CATEGORY_KEY_COLORS.get(category.key, CATEGORY_COLORS["neutral"])
+        self._accent = CATEGORY_KEY_COLORS.get(
+            category.key,
+            CATEGORY_COLORS.get(category.color_key, CATEGORY_COLORS["neutral"]),
+        )
         self._mods: list[InstalledMod] = []
         self._search = ""
         self._collapsed = False
@@ -132,7 +136,11 @@ class CategoryBox(ModDropTargetMixin, QFrame):
         root.setContentsMargins(SPACING_MD, SPACING_SM, SPACING_MD, SPACING_MD)
         root.setSpacing(SPACING_SM)
 
-        header = QHBoxLayout()
+        self.header_widget = QWidget()
+        self.header_widget.setObjectName("boxHeader")
+        self.header_widget.setCursor(Qt.CursorShape.OpenHandCursor)
+        header = QHBoxLayout(self.header_widget)
+        header.setContentsMargins(0, 0, 0, 0)
         header.setSpacing(SPACING_SM)
         self.drag_handle = BoxDragHandle(category.key, self, self)
         header.addWidget(self.drag_handle)
@@ -169,7 +177,7 @@ class CategoryBox(ModDropTargetMixin, QFrame):
         self.collapse_button.setFixedSize(28, 28)
         self.collapse_button.clicked.connect(lambda: self.set_collapsed(not self._collapsed))
         header.addWidget(self.collapse_button)
-        root.addLayout(header)
+        root.addWidget(self.header_widget)
 
         self.body = QWidget()
         body_layout = QVBoxLayout(self.body)
@@ -290,6 +298,30 @@ class CategoryBox(ModDropTargetMixin, QFrame):
             viewport_point = view.viewport().mapFromGlobal(point)
             return view.mapToScene(viewport_point)
         return QPointF(point)
+
+    def point_in_drag_zone(self, box_local: QPoint) -> bool:
+        """True when a box-local point sits on the header bar but not on a control.
+
+        This lets the canvas start a move when the user grabs anywhere along the
+        header row (handle, icon, title, stats) while leaving the color and
+        collapse buttons clickable.
+        """
+        header_origin = self.header_widget.mapTo(self, QPoint())
+        header_rect = QRect(header_origin, self.header_widget.size())
+        if not header_rect.contains(box_local):
+            return False
+        widget = self.childAt(box_local)
+        while widget is not None and widget is not self:
+            if isinstance(widget, QAbstractButton):
+                return widget is self.drag_handle
+            widget = widget.parentWidget()
+        return True
+
+    def set_dragging(self, dragging: bool) -> None:
+        """Reflect the active/idle drag state on the header cursor."""
+        cursor = Qt.CursorShape.ClosedHandCursor if dragging else Qt.CursorShape.OpenHandCursor
+        self.header_widget.setCursor(cursor)
+        self.drag_handle.setCursor(cursor)
 
     def raise_on_canvas(self) -> None:
         proxy = self.graphicsProxyWidget()

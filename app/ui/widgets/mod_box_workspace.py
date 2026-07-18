@@ -2,8 +2,17 @@ from __future__ import annotations
 
 import math
 
-from PyQt6.QtCore import QLineF, QPoint, QPointF, QRect, QRectF, Qt
-from PyQt6.QtGui import QColor, QKeyEvent, QMouseEvent, QPainter, QPen, QResizeEvent, QWheelEvent
+from PyQt6.QtCore import QLineF, QPoint, QPointF, QRect, QRectF, Qt, pyqtSignal
+from PyQt6.QtGui import (
+    QColor,
+    QContextMenuEvent,
+    QKeyEvent,
+    QMouseEvent,
+    QPainter,
+    QPen,
+    QResizeEvent,
+    QWheelEvent,
+)
 from PyQt6.QtWidgets import (
     QAbstractButton,
     QApplication,
@@ -33,6 +42,10 @@ from app.ui.widgets.mod_card import ModCard
 
 class ModBoxWorkspace(QGraphicsView):
     """Houdini-style node canvas for independently movable category boxes."""
+
+    # Emitted on a canvas right-click or the "+ Group" control: (global pos, scene pos).
+    # The page owns the menu because it knows the category catalog and existing boxes.
+    context_menu_requested = pyqtSignal(QPoint, QPointF)
 
     DEFAULT_COLUMNS = 2
     SCENE_HALF_EXTENT = 10000
@@ -105,6 +118,11 @@ class ModBoxWorkspace(QGraphicsView):
         )
         self.arrange_button.setFixedWidth(68)
         row.addWidget(self.arrange_button)
+        self.add_group_button = self._control_button(
+            "+ Group", "Create a new group box", self._request_add_menu
+        )
+        self.add_group_button.setFixedWidth(72)
+        row.addWidget(self.add_group_button)
         self.controls.adjustSize()
         self.controls.raise_()
 
@@ -269,6 +287,18 @@ class ModBoxWorkspace(QGraphicsView):
         self.zoom_by(self.ZOOM_STEP if delta > 0 else 1 / self.ZOOM_STEP)
         event.accept()
 
+    def contextMenuEvent(self, event: QContextMenuEvent) -> None:  # noqa: N802
+        scene_position = self.mapToScene(event.pos())
+        self.context_menu_requested.emit(event.globalPos(), scene_position)
+        event.accept()
+
+    def _request_add_menu(self) -> None:
+        """Route the '+ Group' control through the same menu as a right-click."""
+        anchor = self.add_group_button.mapToGlobal(
+            QPoint(0, self.add_group_button.height())
+        )
+        self.context_menu_requested.emit(anchor, self.camera_center())
+
     def keyPressEvent(self, event: QKeyEvent) -> None:  # noqa: N802
         if event.key() == Qt.Key.Key_Escape and self._card_drag_source is not None:
             self._cancel_card_drag()
@@ -302,14 +332,14 @@ class ModBoxWorkspace(QGraphicsView):
             return
         if event.button() == Qt.MouseButton.LeftButton:
             scene_position = self.mapToScene(event.position().toPoint())
-            dragged = self._box_at_drag_handle(scene_position)
+            dragged = self._box_at_header(scene_position)
             if dragged is not None:
                 key, box = dragged
                 self._dragged_box_key = key
                 self._box_drag_start = scene_position
                 self._box_drag_origin = self._proxies[key].pos()
                 box.raise_on_canvas()
-                box.drag_handle.setCursor(Qt.CursorShape.ClosedHandCursor)
+                box.set_dragging(True)
                 event.accept()
                 return
             card = self._card_at_drag_point(scene_position)
@@ -358,7 +388,7 @@ class ModBoxWorkspace(QGraphicsView):
         if self._dragged_box_key is not None and event.button() == Qt.MouseButton.LeftButton:
             box = self._boxes[self._dragged_box_key]
             self._dragged_box_key = None
-            box.drag_handle.setCursor(Qt.CursorShape.OpenHandCursor)
+            box.set_dragging(False)
             box.notify_geometry_changed()
             event.accept()
             return
@@ -468,6 +498,13 @@ class ModBoxWorkspace(QGraphicsView):
                 return box
         return None
 
+    def box_key_at(self, scene_position: QPointF) -> str | None:
+        """Return the key of the front-most box under a scene point, if any."""
+        for key, box in self._boxes_front_to_back():
+            if box.rect().contains(self._proxies[key].mapFromScene(scene_position).toPoint()):
+                return key
+        return None
+
     def _boxes_front_to_back(self) -> list[tuple[str, CategoryBox]]:
         boxes_back_to_front = tuple(self._boxes.items())
         ordered = sorted(
@@ -477,13 +514,11 @@ class ModBoxWorkspace(QGraphicsView):
         )
         return [box_entry for _index, box_entry in ordered]
 
-    def _box_at_drag_handle(self, scene_position: QPointF) -> tuple[str, CategoryBox] | None:
-        """Return the box whose header handle contains a scene position."""
+    def _box_at_header(self, scene_position: QPointF) -> tuple[str, CategoryBox] | None:
+        """Return the box whose header drag zone contains a scene position."""
         for key, box in self._boxes_front_to_back():
             proxy = self._proxies[key]
-            handle_origin = box.drag_handle.mapTo(box, QPoint())
-            handle_rect = QRect(handle_origin, box.drag_handle.size())
-            if handle_rect.contains(proxy.mapFromScene(scene_position).toPoint()):
+            if box.point_in_drag_zone(proxy.mapFromScene(scene_position).toPoint()):
                 return key, box
         return None
 
