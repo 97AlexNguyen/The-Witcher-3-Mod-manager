@@ -51,3 +51,17 @@ def load_category_catalog() -> list[Category]:
         categories.append(Category(key, entry["name"], palette_color_key(int(entry["category_id"]))))
     categories.append(_UNCATEGORIZED)
     return categories
+
+
+def nexus_category_name(category_id: int | None) -> str | None:
+    """Return Nexus's display name for a Witcher 3 mod category ID."""
+    if category_id is None:
+        return None
+    raw = json.loads(
+        resources.files("app.data").joinpath(_CATALOG_RESOURCE).read_text("utf-8")
+    )
+    for entry in raw.get("categories", []):
+        if entry.get("category_id") == category_id:
+            name = entry.get("name")
+            return name if isinstance(name, str) else None
+    return None

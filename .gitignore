@@ -115,3 +115,4 @@ ENV/
 .pdm-python
 /tests
 /tests
+/zip_demo
