@@ -7,7 +7,9 @@ from PyQt6.QtGui import QColor, QDragEnterEvent, QDropEvent
 from PyQt6.QtWidgets import (
     QFileDialog,
     QHBoxLayout,
+    QInputDialog,
     QLabel,
+    QMenu,
     QSplitter,
     QVBoxLayout,
     QWidget,
@@ -74,6 +76,14 @@ class ModManagerPage(QWidget):
         # Metadata (name/colour) for every category that currently has a box.
         # Rebuilt from the manifest and kept pruned to the active set.
         self._registry: dict[str, Category] = self._build_registry(manifest.categories)
+        # Keys of user-created categories, which keep their box even when empty
+        # (until the user removes them). Seeded from the manifest so hand-made
+        # empty categories survive a restart.
+        self._pinned_keys: set[str] = {
+            category.key
+            for category in manifest.categories
+            if category.user_created and category.key != UNCATEGORIZED.key
+        }
         # Live lists the boxes and detail panel hold by reference; kept in sync
         # with the active category set so their "move to" menus stay current.
         self._categories: list[Category] = []
@@ -125,10 +135,9 @@ class ModManagerPage(QWidget):
         layout.addWidget(self.notice_label)
 
         self.box_workspace = ModBoxWorkspace(self._dark_theme)
-        # Categories are mod-driven now; the "add empty group" affordance no
-        # longer fits the model, so hide it rather than let it spawn a box that
-        # would be pruned on the next reconcile.
-        self.box_workspace.add_group_button.hide()
+        # Categories are usually mod-driven, but the user may also create one by
+        # hand (the "+ Group" control or the canvas right-click menu). A hand-made
+        # category is pinned so its empty box survives the next reconcile.
 
         self.detail_panel = ModDetailPanel(self._box_categories)
         self.splitter = QSplitter(Qt.Orientation.Horizontal)
@@ -160,6 +169,8 @@ class ModManagerPage(QWidget):
         return box
 
     def _connect(self) -> None:
+        self.box_workspace.create_category_requested.connect(self._prompt_create_category)
+        self.box_workspace.context_menu_requested.connect(self._show_canvas_menu)
         self.detail_panel.category_changed.connect(self._set_mod_category)
         self.mod_model.dataChanged.connect(self._on_model_data_changed)
         self.mod_model.rowsInserted.connect(self._on_membership_changed)
@@ -230,10 +241,12 @@ class ModManagerPage(QWidget):
         return category
 
     def _active_category_keys(self) -> set[str]:
-        """Keys that should have a box: Uncategorized plus every category a mod
-        is currently filed under."""
+        """Keys that should have a box: Uncategorized, every category a mod is
+        currently filed under, and every user-created (pinned) category, which
+        stays even while empty."""
         keys = {UNCATEGORIZED.key}
         keys.update(mod.category_key for mod in self.mod_model.mods)
+        keys.update(self._pinned_keys)
         return keys
 
     def _ordered_active_categories(self) -> list[Category]:
@@ -271,6 +284,71 @@ class ModManagerPage(QWidget):
             if category.key not in self.boxes:
                 self._install_box(category)
         self._refresh_boxes(rebuild_body=rebuild_body)
+
+    # -- user-created categories ------------------------------------------ #
+
+    def _show_canvas_menu(self, global_pos, scene_pos) -> None:
+        """Right-click menu for the canvas. Over a box it offers to remove that
+        category (when empty); anywhere it offers to create a new one."""
+        menu = QMenu(self)
+        key = self.box_workspace.box_key_at(scene_pos)
+        if key is not None:
+            category = self._registry.get(key)
+            name = category.name if category is not None else key
+            remove_action = menu.addAction(f"Remove “{name}”")
+            if category is not None and category.built_in:
+                remove_action.setEnabled(False)
+                remove_action.setToolTip("The Uncategorized box is permanent.")
+            elif self._mods_in(key):
+                remove_action.setEnabled(False)
+                remove_action.setToolTip("Move this box's mods out before removing it.")
+            else:
+                remove_action.triggered.connect(lambda _=False, k=key: self._remove_category(k))
+            menu.addSeparator()
+        create_action = menu.addAction("New category…")
+        create_action.triggered.connect(lambda: self._prompt_create_category())
+        menu.setToolTipsVisible(True)
+        menu.exec(global_pos)
+
+    def _prompt_create_category(self) -> None:
+        name, ok = QInputDialog.getText(self, "New category", "Category name:")
+        if ok:
+            self._create_category(name)
+
+    def _create_category(self, name: str) -> None:
+        """Create a user-made category and place its (empty) box on the canvas."""
+        name = name.strip()
+        if not name:
+            return
+        for category in self._registry.values():
+            if category.name.casefold() == name.casefold():
+                self._show_notice(f"A category named '{category.name}' already exists.")
+                return
+        key = self._unique_key(slugify(name))
+        self._registry[key] = Category(
+            key, name, palette_color_key(len(self._registry)), user_created=True
+        )
+        self._pinned_keys.add(key)
+        self._reconcile_boxes(rebuild_body=True)  # creates the box (free placement)
+        self._schedule_manifest_save()
+        self._show_notice(f"Created category '{name}'.")
+
+    def _remove_category(self, key: str) -> None:
+        """Remove an empty user-created category and its box."""
+        if key == UNCATEGORIZED.key:
+            return
+        category = self._registry.get(key)
+        if category is not None and category.built_in:
+            return
+        if self._mods_in(key):
+            self._show_notice("Move this box's mods out before removing it.")
+            return
+        self._pinned_keys.discard(key)
+        self._registry.pop(key, None)
+        self._settings.remove(f"mod_manager/box_geometry/{key}")
+        self._settings.remove(f"mod_manager/box_color/{key}")
+        self._reconcile_boxes(rebuild_body=True)  # box no longer active -> removed
+        self._schedule_manifest_save()
 
     # -- manifest persistence --------------------------------------------- #
 

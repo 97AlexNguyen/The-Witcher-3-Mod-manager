@@ -81,6 +81,7 @@ def _category_to_dict(category: Category) -> dict:
         "name": category.name,
         "color_key": category.color_key,
         "built_in": category.built_in,
+        "user_created": category.user_created,
     }
 
 
@@ -95,6 +96,7 @@ def _category_from_dict(raw) -> Category | None:
         name=raw.get("name") if isinstance(raw.get("name"), str) else key,
         color_key=raw.get("color_key") if isinstance(raw.get("color_key"), str) else "neutral",
         built_in=bool(raw.get("built_in", False)),
+        user_created=bool(raw.get("user_created", False)),
     )
 
 

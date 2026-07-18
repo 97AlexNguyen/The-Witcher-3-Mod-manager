@@ -18,6 +18,10 @@ class Category:
     name: str
     color_key: str
     built_in: bool = False
+    # True when the user created this category by hand. Such a category keeps its
+    # box on the canvas even with no mods filed under it (until the user removes
+    # it), unlike a mod-derived category which vanishes when its last mod leaves.
+    user_created: bool = False
 
 
 @dataclass(slots=True)

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import math
 
-from PyQt6.QtCore import QLineF, QPoint, QPointF, QRect, QRectF, Qt, pyqtSignal
+from PyQt6.QtCore import QLineF, QPoint, QPointF, QRect, QRectF, QSize, Qt, pyqtSignal
 from PyQt6.QtGui import (
     QColor,
     QContextMenuEvent,
@@ -27,7 +27,6 @@ from PyQt6.QtWidgets import (
 )
 
 from app.ui.theme.tokens import (
-    BOX_DEFAULT_HEIGHT,
     BOX_DEFAULT_WIDTH,
     DARK,
     LIGHT,
@@ -43,11 +42,14 @@ from app.ui.widgets.mod_card import ModCard
 class ModBoxWorkspace(QGraphicsView):
     """Houdini-style node canvas for independently movable category boxes."""
 
-    # Emitted on a canvas right-click or the "+ Group" control: (global pos, scene pos).
-    # The page owns the menu because it knows the category catalog and existing boxes.
+    # Emitted on a canvas right-click: (global pos, scene pos). The page owns the
+    # menu because it knows which category sits under the cursor and whether it
+    # can be removed.
     context_menu_requested = pyqtSignal(QPoint, QPointF)
+    # Emitted by the "+ Group" control. The page prompts for a name and creates
+    # the category; placement is handled here so it never overlaps a box.
+    create_category_requested = pyqtSignal()
 
-    DEFAULT_COLUMNS = 2
     SCENE_HALF_EXTENT = 10000
     MIN_ZOOM = 0.35
     MAX_ZOOM = 2.50
@@ -119,7 +121,7 @@ class ModBoxWorkspace(QGraphicsView):
         self.arrange_button.setFixedWidth(68)
         row.addWidget(self.arrange_button)
         self.add_group_button = self._control_button(
-            "+ Group", "Create a new group box", self._request_add_menu
+            "+ Group", "Create a new category box", self.create_category_requested.emit
         )
         self.add_group_button.setFixedWidth(72)
         row.addWidget(self.add_group_button)
@@ -137,19 +139,60 @@ class ModBoxWorkspace(QGraphicsView):
         return button
 
     def add_box(self, box: CategoryBox, position: QPointF | None = None) -> None:
-        index = len(self._boxes)
+        # Compute placement before registering the box so it is measured against
+        # the *existing* boxes only and never against itself.
+        if position is None:
+            position = self.free_position_for(box.size())
         self._boxes[box.category.key] = box
         proxy = self.scene().addWidget(box)
         self._proxies[box.category.key] = proxy
-        if position is None:
-            column = index % self.DEFAULT_COLUMNS
-            row = index // self.DEFAULT_COLUMNS
-            position = QPointF(
-                SPACING_LG + column * (BOX_DEFAULT_WIDTH + SPACING_MD),
-                SPACING_LG + row * (BOX_DEFAULT_HEIGHT + SPACING_MD),
-            )
         proxy.setPos(position)
         box.geometry_changed.connect(self._on_box_geometry_changed)
+
+    def free_position_for(self, size: QSize, gap: int = SPACING_LG) -> QPointF:
+        """Find a spot for a new box that sits near the existing cluster without
+        overlapping any of them.
+
+        Auto-created categories (installing a mod under a new category) must land
+        somewhere visible and clear of boxes the user has arranged by hand. We
+        scan a grid anchored to the top-left of the current cluster, filling the
+        first free slot; empty rows below the cluster guarantee a spot exists.
+        """
+        occupied = [
+            QRectF(self.box_geometry(key))
+            for key in self._boxes
+            if self.box_geometry(key).isValid()
+        ]
+        width = float(size.width())
+        height = float(size.height())
+
+        def snap(point: QPointF) -> QPointF:
+            return QPointF(round(point.x() / 4) * 4, round(point.y() / 4) * 4)
+
+        if not occupied:
+            return snap(QPointF(SPACING_LG, SPACING_LG))
+
+        def is_free(candidate: QRectF) -> bool:
+            padded = candidate.adjusted(-gap / 2, -gap / 2, gap / 2, gap / 2)
+            return not any(padded.intersects(rect) for rect in occupied)
+
+        union = occupied[0]
+        for rect in occupied[1:]:
+            union = union.united(rect)
+        step_x = width + gap
+        step_y = height + gap
+        columns = max(1, int((union.width() + gap) // step_x) + 1)
+        for row in range(200):
+            for column in range(columns + 1):
+                candidate = QRectF(
+                    union.left() + column * step_x,
+                    union.top() + row * step_y,
+                    width,
+                    height,
+                )
+                if is_free(candidate):
+                    return snap(candidate.topLeft())
+        return snap(QPointF(union.right() + gap, union.top()))
 
     def remove_box(self, category_key: str) -> None:
         """Remove a box from the canvas (its category no longer has any mods)."""
@@ -302,13 +345,6 @@ class ModBoxWorkspace(QGraphicsView):
         scene_position = self.mapToScene(event.pos())
         self.context_menu_requested.emit(event.globalPos(), scene_position)
         event.accept()
-
-    def _request_add_menu(self) -> None:
-        """Route the '+ Group' control through the same menu as a right-click."""
-        anchor = self.add_group_button.mapToGlobal(
-            QPoint(0, self.add_group_button.height())
-        )
-        self.context_menu_requested.emit(anchor, self.camera_center())
 
     def keyPressEvent(self, event: QKeyEvent) -> None:  # noqa: N802
         if event.key() == Qt.Key.Key_Escape and self._card_drag_source is not None:
