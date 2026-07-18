@@ -66,15 +66,13 @@ class MainWindow(QMainWindow):
         header_layout.addWidget(settings_button)
         layout.addWidget(header)
 
-        self.mod_manager_page = ModManagerPage(self._settings)
+        self.mod_manager_page = ModManagerPage(self._settings, self._theme_manager)
         layout.addWidget(self.mod_manager_page, 1)
         self.setCentralWidget(root)
         self._theme_changed(self._theme_manager.is_dark)
 
     def _theme_changed(self, dark: bool) -> None:
         self.theme_button.setText("LIGHT MODE" if dark else "DARK MODE")
-        self.mod_manager_page.card_list.setProperty("darkTheme", dark)
-        self.mod_manager_page.card_list.viewport().update()
 
     def _restore_geometry(self) -> None:
         geometry = self._settings.value("window/geometry")

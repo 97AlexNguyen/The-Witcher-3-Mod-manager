@@ -1,8 +1,10 @@
 # Mod manager tab — UI implementation guide
 
-Status: **design agreed, not implemented**. This describes the primary tab of the app —
-the screen the user lives in. Installing mods is a separate flow; this tab manages mods
-that are already known to the app.
+Status: **zoomable node canvas implemented against mock data** (pan/zoom + collapsible,
+movable and resizable boxes + drag-to-recategorize + detail panel). **§0 describes it.**
+Sections 1 and 3's rail+table design is **superseded** by §0 and kept only for context;
+§2 (model layer), §4 (detail panel), §6 (threading), and §7 (empty states) still apply.
+This tab manages mods already known to the app; installing is a separate flow.
 
 Read `.agents/skills/pyqt6-ui-designer/references/design_tokens.md` before writing any
 widget code. All spacing/color/typography constants referenced here come from there.
@@ -14,7 +16,65 @@ only indirectly, by asking the install/toggle services to perform them.
 
 ---
 
-## 1. Layout
+## 0. Current layout — box shelf (implemented)
+
+The tab is a `QSplitter`: a Houdini-style **node canvas** (`QGraphicsView` and
+`QGraphicsScene`) on the left and a collapsible `ModDetailPanel` on the right. Each
+`CategoryBox` is embedded through a `QGraphicsProxyWidget` with independent scene
+coordinates and size; no layout controls box placement. Drag `⠿` to move a box and `◢`
+to resize it. Moving or resizing one box never pushes its neighbours.
+
+The canvas has a minor/major grid, wheel zoom centred under the pointer, middle-mouse or
+Space+left-drag panning, plus zoom, Frame All and Arrange controls. Arrange packs the
+current boxes into compact non-overlapping rows near the camera, preserving every box's
+size and collapsed state, then frames the result. Its large scene supports many boxes
+without expanding a conventional widget. Box geometry, collapsed state, camera centre
+and zoom level all persist to `QSettings`.
+
+- **Each box always shows** its header (category name, on/off split, mod count, attention
+  flag). Collapsing a box hides its body and leaves this statistical summary visible;
+  expanding it reveals search and a scrolling list of mod cards.
+- **Move and resize freely** — box movement is direct geometry manipulation from its
+  header handle; mod movement still uses `MIME_MOD_IDENTITY`. The separate interaction
+  paths prevent moving a box from conflicting with dragging a mod between boxes.
+- **Inside a box**, mods are `ModCard`s in a `FlowLayout` grid that reflows to the box's
+  current width. Every card is the exact same fixed size regardless of name length, version
+  presence, or status — two cards with the same job sitting next to each other must never
+  differ in size. Long names wrap to two lines and ellipsise; the full name is in the tool
+  tip. Nothing is clipped mid-glyph.
+- **Recategorize by drag** — drag a `ModCard` out of one box and drop it on another box
+  (the whole box is a drop target). Drop = `model.set_category`. Source and target refresh,
+  and every box header count updates.
+- **Toggle** ON/OFF per card writes through the list model; only the box header count
+  refreshes, not the card grid, so the clicked card is not destroyed under the cursor.
+- **Double-click a card** (or its ⋮ → *View details*) drives the `ModDetailPanel` on the
+  right. Its category picker routes through the same `model.set_category`.
+- **Remove** and **install** are acknowledged with a notice but not yet wired — removal
+  un-merges a mod from game config and install is a separate flow.
+
+Component map:
+
+| Widget | File | Role |
+|--------|------|------|
+| `CategoryBox` | `app/ui/widgets/mod_category_box.py` | One collapsible category box; header stats + scrolling card list; box drag source and mod drop target |
+| `ModBoxWorkspace` | `app/ui/widgets/mod_box_workspace.py` | Zoomable `QGraphicsView` node canvas; owns box proxies, camera, grid and pan/zoom controls |
+| `ModCard` | `app/ui/widgets/mod_card.py` | One mod; fixed size; drag source; thumbnail |
+| `FlowLayout` | `app/ui/widgets/flow_layout.py` | Wrapping grid for the cards |
+| `ModDropTargetMixin` | `app/ui/widgets/mod_drop_target.py` | Shared drop handling |
+| `ModDetailPanel` | `app/ui/widgets/mod_detail_panel.py` | Read-only mod detail; category picker |
+| `ModManagerPage` | `app/ui/pages/mod_manager_page.py` | Owns model + shelf of boxes + detail panel |
+
+`InstalledModListModel` remains the single source of truth: cards and tiles read from it
+and write category/enable changes back through it, and its `dataChanged`/row signals drive
+every refresh. Box membership is derived (`category_key`), never stored per box.
+
+---
+
+## 1. Layout — SUPERSEDED by §0 (box shelf)
+
+> The rail + table layout below was the original design. It has been replaced by the box
+> shelf described in §0. Kept for context on the sizing/persistence reasoning, which still
+> informs the shelf/detail splitter.
 
 Three horizontal panes in a `QSplitter(Qt.Orientation.Horizontal)`. Horizontal because
 target displays are wide and short (1920x1080 and ultrawide); vertical stacking wastes

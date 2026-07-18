@@ -3,57 +3,97 @@ from __future__ import annotations
 import unittest
 from dataclasses import replace
 
-from PyQt6.QtCore import QItemSelectionModel, QMimeData, QPoint, QPointF, QSettings, Qt, QUrl
-from PyQt6.QtGui import QDropEvent
+from PyQt6.QtCore import QEvent, QMimeData, QPoint, QPointF, QRect, QSettings, Qt, QUrl
+from PyQt6.QtGui import QDropEvent, QFont, QFontMetrics, QMouseEvent
 from PyQt6.QtTest import QTest
 from PyQt6.QtWidgets import QApplication
 
 from app.data import make_mock_categories, make_mock_mods
-from app.ui.models import InstalledModListModel, InstalledModRoles, ModListFilterProxy, SortMode
+from app.ui.models import InstalledModListModel, InstalledModRoles
 from app.ui.pages import ModManagerPage
-from app.ui.theme.tokens import SPACING_MD
+from app.ui.widgets.mod_card import _wrap_elided
 
 
-class UiModelTests(unittest.TestCase):
+class ModelTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls) -> None:
         cls.app = QApplication.instance() or QApplication([])
 
     def setUp(self) -> None:
         self.mods = make_mock_mods()
-        self.source = InstalledModListModel(self.mods)
-        self.proxy = ModListFilterProxy()
-        self.proxy.setSourceModel(self.source)
-
-    def test_category_and_search_filters_are_combined(self) -> None:
-        self.proxy.set_category("gameplay")
-        self.proxy.set_search_text("ghost")
-        self.assertEqual(self.proxy.rowCount(), 1)
-        self.assertEqual(self.proxy.index(0, 0).data(InstalledModRoles.MOD).identity, "ghost-mode")
-
-    def test_search_includes_mod_description(self) -> None:
-        self.proxy.set_search_text("blade oil")
-        self.assertEqual(self.proxy.rowCount(), 1)
-        self.assertEqual(self.proxy.index(0, 0).data(InstalledModRoles.MOD).identity, "auto-apply-oils")
-
-    def test_sort_modes_use_domain_values(self) -> None:
-        self.proxy.set_sort_mode(SortMode.PRIORITY, Qt.SortOrder.DescendingOrder)
-        priorities = [
-            self.proxy.index(row, 0).data(InstalledModRoles.MOD).priority
-            for row in range(self.proxy.rowCount())
-        ]
-        self.assertEqual(priorities[:3], [20, 10, 5])
-        self.assertEqual(priorities[-1], None)
+        self.model = InstalledModListModel(self.mods)
 
     def test_categories_are_single_assignment(self) -> None:
-        categories = {category.key for category in make_mock_categories() if category.key != "all"}
-        self.assertTrue(all(mod.category_key in categories for mod in self.mods))
+        keys = {category.key for category in make_mock_categories() if category.key != "all"}
+        self.assertTrue(all(mod.category_key in keys for mod in self.mods))
 
-    def test_mock_toggle_updates_only_in_memory(self) -> None:
-        index = self.source.index(0, 0)
+    def test_toggle_updates_only_in_memory(self) -> None:
+        index = self.model.index(0, 0)
         original = bool(index.data(InstalledModRoles.ENABLED))
-        self.assertTrue(self.source.setData(index, not original, InstalledModRoles.ENABLED))
+        self.assertTrue(self.model.setData(index, not original, InstalledModRoles.ENABLED))
         self.assertEqual(bool(index.data(InstalledModRoles.ENABLED)), not original)
+
+    def test_set_category_moves_mod(self) -> None:
+        mod = self.mods[0]
+        self.assertTrue(self.model.set_category(mod, "interface"))
+        self.assertEqual(mod.category_key, "interface")
+
+
+class ModelLookupTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls.app = QApplication.instance() or QApplication([])
+
+    def test_row_lookup_uses_object_identity_not_value_equality(self) -> None:
+        mods = make_mock_mods()
+        twin = replace(mods[0])
+        model = InstalledModListModel([twin, *mods])
+        self.assertEqual(twin, mods[0])
+        self.assertEqual(model.row_for(mods[0]), 1)
+        self.assertEqual(model.row_for(twin), 0)
+
+        model.set_priority(mods[0], 123)
+        self.assertEqual(mods[0].priority, 123)
+        self.assertNotEqual(twin.priority, 123)
+
+    def test_row_lookup_reports_unknown_mods(self) -> None:
+        mods = make_mock_mods()
+        model = InstalledModListModel(mods[1:])
+        self.assertEqual(model.row_for(mods[0]), -1)
+        self.assertFalse(model.set_priority(mods[0], 5))
+        self.assertFalse(model.set_category(mods[0], "graphics"))
+
+
+class ElisionTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls.app = QApplication.instance() or QApplication([])
+
+    def _metrics(self) -> QFontMetrics:
+        font = QFont()
+        font.setPointSize(14)
+        return QFontMetrics(font)
+
+    def test_long_name_never_overflows_the_box(self) -> None:
+        fm = self._metrics()
+        text = "Brothers in Arms - TW3 Bug Fix Collection Extended Deluxe Ultra Edition"
+        wrapped = _wrap_elided(fm, text, 220, 2)
+        lines = wrapped.split("\n")
+        self.assertLessEqual(len(lines), 2)
+        for line in lines:
+            self.assertLessEqual(fm.horizontalAdvance(line), 220)
+        self.assertTrue(wrapped.endswith("…"))
+
+    def test_short_name_is_left_intact(self) -> None:
+        fm = self._metrics()
+        wrapped = _wrap_elided(fm, "Ghost Mode", 220, 2)
+        self.assertEqual(wrapped, "Ghost Mode")
+
+    def test_single_overlong_word_is_elided_not_clipped(self) -> None:
+        fm = self._metrics()
+        wrapped = _wrap_elided(fm, "Supercalifragilisticexpialidociousmodnamewithnospaces", 120, 2)
+        for line in wrapped.split("\n"):
+            self.assertLessEqual(fm.horizontalAdvance(line), 120)
 
 
 class ModManagerPageTests(unittest.TestCase):
@@ -70,258 +110,377 @@ class ModManagerPageTests(unittest.TestCase):
         self.app.processEvents()
         return page, settings
 
-    def test_dashboard_card_layout_can_be_constructed(self) -> None:
-        page, settings = self.make_page("cards")
-        self.assertEqual(page.mod_model.rowCount(), 5)
-        self.assertEqual(page.proxy.rowCount(), 5)
-        self.assertEqual(page.card_list.model(), page.proxy)
-        self.assertEqual(page.result_label.text(), "5 shown")
+    def tearDownPage(self, page: ModManagerPage, settings: QSettings) -> None:
+        page.close()
+        settings.clear()
+
+    def test_canvas_has_one_box_per_real_category(self) -> None:
+        page, settings = self.make_page("canvas")
+        self.assertEqual(set(page.boxes), {"graphics", "gameplay", "interface", "uncategorized"})
+        self.assertNotIn("all", page.boxes)
         self.assertEqual(page.splitter.count(), 2)
-        page.close()
-        settings.clear()
+        self.tearDownPage(page, settings)
 
-    def test_result_count_reports_total_when_filtered(self) -> None:
-        page, settings = self.make_page("result-total")
-        page.filter_bar.search_input.setText("ghost")
+    def test_boxes_are_embedded_as_items_in_the_node_canvas(self) -> None:
+        page, settings = self.make_page("freeform-workspace")
+        self.assertIs(page.splitter.widget(0), page.box_workspace)
+        self.assertIs(page.splitter.widget(1), page.detail_panel)
+        self.assertEqual(page.box_workspace.box_count(), 4)
+        self.assertTrue(all(box.graphicsProxyWidget() is not None for box in page.boxes.values()))
+        self.tearDownPage(page, settings)
+
+    def test_box_header_stats_reflect_the_model(self) -> None:
+        page, settings = self.make_page("stats")
+        self.assertIn("2 mods", page.boxes["gameplay"].stats_label.text())
+        self.assertIn("1 mod", page.boxes["graphics"].stats_label.text())
+        self.assertIn("1", page.boxes["uncategorized"].attention_label.text())
+        self.assertIn("need attention", page.boxes["uncategorized"].attention_label.toolTip())
+        self.tearDownPage(page, settings)
+
+    def test_box_can_collapse_to_stats_only(self) -> None:
+        page, settings = self.make_page("collapse")
+        box = page.boxes["gameplay"]
+        box.collapse_button.click()
         self.app.processEvents()
-        self.assertEqual(page.result_label.text(), "1 of 5 shown")
-        page.close()
-        settings.clear()
-
-    def test_card_delegate_toggle_action_handles_mouse_click(self) -> None:
-        page, settings = self.make_page("toggle-card")
-        index = page.proxy.index(0, 0)
-        original = bool(index.data(InstalledModRoles.ENABLED))
-        item_rect = page.card_list.visualRect(index)
-        click_pos = QPoint(item_rect.right() - SPACING_MD - 66, item_rect.top() + SPACING_MD + 16)
-        QTest.mouseClick(page.card_list.viewport(), Qt.MouseButton.LeftButton, pos=click_pos)
+        self.assertTrue(box.is_collapsed)
+        self.assertFalse(box.body.isVisible())
+        self.assertTrue(box.stats_label.isVisible())
+        box.collapse_button.click()
         self.app.processEvents()
-        self.assertEqual(bool(index.data(InstalledModRoles.ENABLED)), not original)
-        page.close()
-        settings.clear()
+        self.assertFalse(box.is_collapsed)
+        self.assertTrue(box.body.isVisible())
+        self.tearDownPage(page, settings)
 
-    def test_result_count_follows_active_filter(self) -> None:
-        page, settings = self.make_page("result-count")
-        page.filter_bar.category_combo.setCurrentIndex(page.filter_bar.category_combo.findData("gameplay"))
+    def test_one_box_can_move_and_resize_without_affecting_another(self) -> None:
+        page, settings = self.make_page("independent-geometry")
+        graphics = page.boxes["graphics"]
+        gameplay_before = page.box_workspace.box_geometry("gameplay")
+        page.box_workspace.set_box_geometry("graphics", QRect(72, 84, 680, 520))
         self.app.processEvents()
-        self.assertEqual(page.result_label.text(), "2 of 5 shown")
-        page.close()
-        settings.clear()
+        self.assertEqual(page.box_workspace.box_geometry("graphics"), QRect(72, 84, 680, 520))
+        self.assertEqual(page.box_workspace.box_geometry("gameplay"), gameplay_before)
+        self.tearDownPage(page, settings)
 
-    def test_selection_drives_detail_panel(self) -> None:
-        page, settings = self.make_page("detail-selection")
-        index = page.proxy.index(0, 0)
-        page.card_list.selectionModel().select(index, QItemSelectionModel.SelectionFlag.ClearAndSelect)
+    def test_canvas_zoom_is_bounded_and_changes_the_view_transform(self) -> None:
+        page, settings = self.make_page("canvas-zoom")
+        canvas = page.box_workspace
+        canvas.set_zoom(1.0)
+        canvas.zoom_by(canvas.ZOOM_STEP)
         self.app.processEvents()
-        selected_mod = index.data(InstalledModRoles.MOD)
-        self.assertIs(page.detail_panel.current_mod, selected_mod)
-        self.assertEqual(page.detail_panel.name_label.text(), selected_mod.name)
-        page.close()
-        settings.clear()
+        self.assertAlmostEqual(canvas.zoom_factor, canvas.ZOOM_STEP)
+        self.assertAlmostEqual(canvas.transform().m11(), canvas.ZOOM_STEP)
+        canvas.set_zoom(100.0)
+        self.assertEqual(canvas.zoom_factor, canvas.MAX_ZOOM)
+        canvas.set_zoom(0.01)
+        self.assertEqual(canvas.zoom_factor, canvas.MIN_ZOOM)
+        self.tearDownPage(page, settings)
 
-    def test_detail_category_edit_updates_mock_model(self) -> None:
-        page, settings = self.make_page("detail-edits")
-        index = page.proxy.index(0, 0)
-        page.card_list.selectionModel().select(index, QItemSelectionModel.SelectionFlag.ClearAndSelect)
+    def test_arrange_boxes_creates_a_compact_non_overlapping_layout(self) -> None:
+        page, settings = self.make_page("canvas-arrange")
+        canvas = page.box_workspace
+        original_sizes = {key: box.size() for key, box in page.boxes.items()}
+        for key in page.boxes:
+            canvas.set_box_geometry(key, QRect(100, 100, original_sizes[key].width(), original_sizes[key].height()))
+
+        canvas.arrange_button.click()
         self.app.processEvents()
-        mod = page.detail_panel.current_mod
-        page.detail_panel.category_combo.setCurrentIndex(page.detail_panel.category_combo.findData("gameplay"))
+        geometries = [canvas.box_geometry(key) for key in page.boxes]
+        for index, geometry in enumerate(geometries):
+            self.assertEqual(geometry.size(), original_sizes[list(page.boxes)[index]])
+            for other in geometries[index + 1:]:
+                self.assertFalse(geometry.intersects(other))
+        self.assertGreater(len({geometry.y() for geometry in geometries}), 1)
+        self.tearDownPage(page, settings)
+
+    def test_middle_mouse_drag_pans_the_canvas_camera(self) -> None:
+        page, settings = self.make_page("canvas-pan")
+        canvas = page.box_workspace
+        before = canvas.camera_center()
+        start = QPointF(240, 220)
+        end = QPointF(320, 280)
+        canvas.mousePressEvent(QMouseEvent(
+            QEvent.Type.MouseButtonPress, start, start,
+            Qt.MouseButton.MiddleButton, Qt.MouseButton.MiddleButton,
+            Qt.KeyboardModifier.NoModifier,
+        ))
+        canvas.mouseMoveEvent(QMouseEvent(
+            QEvent.Type.MouseMove, end, end,
+            Qt.MouseButton.NoButton, Qt.MouseButton.MiddleButton,
+            Qt.KeyboardModifier.NoModifier,
+        ))
+        canvas.mouseReleaseEvent(QMouseEvent(
+            QEvent.Type.MouseButtonRelease, end, end,
+            Qt.MouseButton.MiddleButton, Qt.MouseButton.NoButton,
+            Qt.KeyboardModifier.NoModifier,
+        ))
         self.app.processEvents()
-        self.assertEqual(mod.category_key, "gameplay")
-        page.close()
-        settings.clear()
+        self.assertNotEqual(canvas.camera_center(), before)
+        self.tearDownPage(page, settings)
 
-    def test_detail_panel_exposes_no_mod_mutating_controls(self) -> None:
-        page, settings = self.make_page("detail-lean")
-        self.select_first(page)
-        panel = page.detail_panel
-        # Category is the only thing the panel may change; priority and enablement are
-        # owned by game config and the card respectively.
-        for gone in ("priority_spin", "enable_button", "state_label", "health_label"):
-            self.assertFalse(hasattr(panel, gone), f"{gone} should be gone from the detail panel")
-        for gone_signal in ("priority_changed", "enabled_changed"):
-            self.assertFalse(hasattr(panel, gone_signal), f"{gone_signal} should be gone")
-        self.assertTrue(hasattr(panel, "category_combo"))
-        page.close()
-        settings.clear()
+    def test_drag_and_resize_handles_change_only_their_box_geometry(self) -> None:
+        page, settings = self.make_page("mouse-geometry")
+        box = page.boxes["graphics"]
+        other_before = page.box_workspace.box_geometry("gameplay")
 
-    def test_priority_is_shown_read_only_in_the_meta_block(self) -> None:
-        page, settings = self.make_page("priority-readonly")
-        self.select_first(page)
-        mod = page.detail_panel.current_mod
-        self.assertEqual(page.detail_panel.priority_label.text(), f"Priority: {mod.priority}")
+        canvas = page.box_workspace
+        handle = box.drag_handle
+        handle_center = handle.mapTo(box, handle.rect().center())
+        start_scene = box.graphicsProxyWidget().mapToScene(QPointF(handle_center))
+        start = QPointF(canvas.mapFromScene(start_scene))
+        global_pos = QPointF(canvas.viewport().mapToGlobal(start.toPoint()))
+        canvas.mousePressEvent(QMouseEvent(
+            QEvent.Type.MouseButtonPress, start, global_pos,
+            Qt.MouseButton.LeftButton, Qt.MouseButton.LeftButton,
+            Qt.KeyboardModifier.NoModifier,
+        ))
+        for delta in (QPointF(20, 16), QPointF(48, 36), QPointF(80, 60)):
+            canvas.mouseMoveEvent(QMouseEvent(
+                QEvent.Type.MouseMove, start + delta, global_pos + delta,
+                Qt.MouseButton.NoButton, Qt.MouseButton.LeftButton,
+                Qt.KeyboardModifier.NoModifier,
+            ))
+        canvas.mouseReleaseEvent(QMouseEvent(
+            QEvent.Type.MouseButtonRelease, start + QPointF(80, 60), global_pos + QPointF(80, 60),
+            Qt.MouseButton.LeftButton, Qt.MouseButton.NoButton,
+            Qt.KeyboardModifier.NoModifier,
+        ))
+        self.assertEqual(page.box_workspace.box_geometry("graphics").topLeft(), QPointF(104, 84).toPoint())
 
-        page.mod_model.set_priority(mod, None)
+        resize = box.resize_handle
+        local = QPointF(resize.rect().center())
+        global_pos = QPointF(resize.mapToGlobal(resize.rect().center()))
+        before_size = box.size()
+        resize.mousePressEvent(QMouseEvent(
+            QEvent.Type.MouseButtonPress, local, global_pos,
+            Qt.MouseButton.LeftButton, Qt.MouseButton.LeftButton,
+            Qt.KeyboardModifier.NoModifier,
+        ))
+        resize.mouseMoveEvent(QMouseEvent(
+            QEvent.Type.MouseMove, local, global_pos + QPointF(120, 80),
+            Qt.MouseButton.NoButton, Qt.MouseButton.LeftButton,
+            Qt.KeyboardModifier.NoModifier,
+        ))
+        resize.mouseReleaseEvent(QMouseEvent(
+            QEvent.Type.MouseButtonRelease, local, global_pos + QPointF(120, 80),
+            Qt.MouseButton.LeftButton, Qt.MouseButton.NoButton,
+            Qt.KeyboardModifier.NoModifier,
+        ))
+        self.assertEqual(box.width(), before_size.width() + 120)
+        self.assertEqual(box.height(), before_size.height() + 80)
+        self.assertEqual(page.box_workspace.box_geometry("gameplay"), other_before)
+        self.tearDownPage(page, settings)
+
+    def test_boxes_show_their_cards_immediately(self) -> None:
+        page, settings = self.make_page("cards")
+        self.assertEqual(page.boxes["gameplay"].flow.count(), 2)
+        self.assertEqual(page.boxes["graphics"].flow.count(), 1)
+        self.tearDownPage(page, settings)
+
+    def test_dropping_a_mod_recategorizes_and_updates_all_views(self) -> None:
+        page, settings = self.make_page("drop-mod")
+        page._on_mod_dropped("ghost-mode", "graphics")
         self.app.processEvents()
-        self.assertEqual(page.detail_panel.priority_label.text(), "Priority: Unassigned")
-        page.close()
-        settings.clear()
 
-    def test_multi_selection_shows_bulk_summary(self) -> None:
-        page, settings = self.make_page("detail-multi")
-        selection = page.card_list.selectionModel()
-        selection.select(page.proxy.index(0, 0), QItemSelectionModel.SelectionFlag.ClearAndSelect)
-        selection.select(page.proxy.index(1, 0), QItemSelectionModel.SelectionFlag.Select)
-        self.app.processEvents()
-        self.assertIsNone(page.detail_panel.current_mod)
-        self.assertEqual(page.detail_panel.multi_title.text(), "2 MODS SELECTED")
-        page.close()
-        settings.clear()
+        self.assertEqual(page._mod_for_identity("ghost-mode").category_key, "graphics")
+        self.assertEqual(page.boxes["gameplay"].flow.count(), 1)
+        self.assertEqual(page.boxes["graphics"].flow.count(), 2)
+        self.assertIn("1 mod", page.boxes["gameplay"].stats_label.text())
+        self.assertIn("2 mods", page.boxes["graphics"].stats_label.text())
+        self.assertTrue(page.notice_label.isVisible())
+        self.assertIn("moved to Graphics", page.notice_label.text())
+        self.tearDownPage(page, settings)
 
-    def test_detail_segment_switches_content_section(self) -> None:
-        page, settings = self.make_page("detail-sections")
-        page.card_list.selectionModel().select(
-            page.proxy.index(1, 0),
-            QItemSelectionModel.SelectionFlag.ClearAndSelect,
+    def test_dragging_a_card_between_canvas_boxes_recategorizes_it(self) -> None:
+        page, settings = self.make_page("canvas-card-drag")
+        canvas = page.box_workspace
+        canvas.frame_all()
+        source_box = page.boxes["gameplay"]
+        target_box = page.boxes["graphics"]
+        source_card = next(
+            source_box.flow.itemAt(index).widget()
+            for index in range(source_box.flow.count())
+            if source_box.flow.itemAt(index).widget().mod.identity == "ghost-mode"
+        )
+
+        start_local = source_card.mapTo(source_box, QPoint(18, 18))
+        start_scene = source_box.graphicsProxyWidget().mapToScene(QPointF(start_local))
+        start = QPointF(canvas.mapFromScene(start_scene))
+        target_local = target_box.scroll.viewport().mapTo(
+            target_box,
+            target_box.scroll.viewport().rect().center(),
+        )
+        target_scene = target_box.graphicsProxyWidget().mapToScene(QPointF(target_local))
+        end = QPointF(canvas.mapFromScene(target_scene))
+        QTest.mousePress(
+            canvas.viewport(),
+            Qt.MouseButton.LeftButton,
+            Qt.KeyboardModifier.NoModifier,
+            start.toPoint(),
+        )
+        QTest.mouseMove(canvas.viewport(), end.toPoint(), 20)
+        self.assertIsNotNone(canvas._card_drag_item)
+        self.assertEqual(target_box.property("dropActive"), "true")
+
+        QTest.mouseRelease(
+            canvas.viewport(),
+            Qt.MouseButton.LeftButton,
+            Qt.KeyboardModifier.NoModifier,
+            end.toPoint(),
         )
         self.app.processEvents()
-        page.detail_panel.segment_group.button(2).click()
-        self.app.processEvents()
-        self.assertEqual(page.detail_panel.section_stack.currentIndex(), 2)
-        self.assertIn("Toggle HUD", page.detail_panel.section_labels[2].text())
-        page.close()
-        settings.clear()
 
-    def select_first(self, page):
-        index = page.proxy.index(0, 0)
-        page.card_list.selectionModel().select(index, QItemSelectionModel.SelectionFlag.ClearAndSelect)
-        page.card_list.setCurrentIndex(index)
-        self.app.processEvents()
-        return index
+        self.assertEqual(page._mod_for_identity("ghost-mode").category_key, "graphics")
+        self.assertEqual(target_box.property("dropActive"), "false")
+        self.assertIsNone(canvas._card_drag_item)
+        self.tearDownPage(page, settings)
 
-    def test_editing_a_mod_out_of_the_active_filter_keeps_it_visible(self) -> None:
-        page, settings = self.make_page("edit-out-of-filter")
-        page.filter_bar.category_combo.setCurrentIndex(page.filter_bar.category_combo.findData("gameplay"))
+    def test_card_menu_is_a_native_popup_anchored_after_pan_and_zoom(self) -> None:
+        page, settings = self.make_page("canvas-card-menu")
+        canvas = page.box_workspace
+        box = page.boxes["graphics"]
+        proxy = box.graphicsProxyWidget()
+        canvas.set_zoom(1.6)
+        canvas.centerOn(proxy.sceneBoundingRect().center())
         self.app.processEvents()
-        self.select_first(page)
+        card = box.flow.itemAt(0).widget()
+        button_local = card.menu_button.mapTo(box, card.menu_button.rect().center())
+        button_scene = proxy.mapToScene(QPointF(button_local))
+        button_viewport = canvas.mapFromScene(button_scene)
+
+        QTest.mouseClick(
+            canvas.viewport(),
+            Qt.MouseButton.LeftButton,
+            Qt.KeyboardModifier.NoModifier,
+            button_viewport,
+        )
+        self.app.processEvents()
+
+        menu = card._open_menu
+        self.assertIsNotNone(menu)
+        self.assertTrue(menu.isVisible())
+        self.assertIs(menu.parentWidget(), canvas)
+        self.assertIsNone(menu.graphicsProxyWidget())
+        self.assertEqual(menu.pos(), card._menu_popup_position(menu))
+        self.assertIsNone(canvas._card_drag_source)
+        menu.close()
+        self.app.processEvents()
+        self.tearDownPage(page, settings)
+
+    def test_dropping_onto_the_same_box_is_a_noop(self) -> None:
+        page, settings = self.make_page("drop-same")
+        before = page.boxes["gameplay"].flow.count()
+        page._on_mod_dropped("ghost-mode", "gameplay")
+        self.app.processEvents()
+        self.assertEqual(page.boxes["gameplay"].flow.count(), before)
+        self.assertFalse(page.notice_label.isVisible())
+        self.tearDownPage(page, settings)
+
+    def test_toggling_a_card_updates_the_model_and_keeps_the_card(self) -> None:
+        page, settings = self.make_page("toggle")
+        box = page.boxes["graphics"]
+        card = box.flow.itemAt(0).widget()
+        mod = card.mod
+        before = mod.enabled
+        card.toggle.click()
+        self.app.processEvents()
+
+        self.assertNotEqual(mod.enabled, before)
+        row = page.mod_model.row_for(mod)
+        self.assertEqual(bool(page.mod_model.index(row, 0).data(InstalledModRoles.ENABLED)), mod.enabled)
+        # An enable toggle refreshes only the header, so the same card object survives.
+        self.assertIs(box.flow.itemAt(0).widget(), card)
+        self.tearDownPage(page, settings)
+
+    def test_search_filters_within_a_box(self) -> None:
+        page, settings = self.make_page("search")
+        box = page.boxes["gameplay"]
+        box.search_input.setText("ghost")
+        self.app.processEvents()
+        self.assertEqual(box.flow.count(), 1)
+        self.tearDownPage(page, settings)
+
+    def test_double_click_drives_the_detail_panel(self) -> None:
+        page, settings = self.make_page("details")
+        card = page.boxes["interface"].flow.itemAt(0).widget()
+        card.details_requested.emit(card.mod)
+        self.app.processEvents()
+        self.assertIs(page.detail_panel.current_mod, card.mod)
+        self.assertEqual(page.detail_panel.name_label.text(), card.mod.name)
+        self.tearDownPage(page, settings)
+
+    def test_detail_category_combo_recategorizes_through_the_model(self) -> None:
+        page, settings = self.make_page("detail-cat")
+        card = page.boxes["interface"].flow.itemAt(0).widget()
+        card.details_requested.emit(card.mod)
+        self.app.processEvents()
         mod = page.detail_panel.current_mod
-        page.detail_panel.category_combo.setCurrentIndex(page.detail_panel.category_combo.findData("graphics"))
+        combo = page.detail_panel.category_combo
+        combo.setCurrentIndex(combo.findData("gameplay"))
         self.app.processEvents()
+        self.assertEqual(mod.category_key, "gameplay")
+        self.assertIn(str(len(page._mods_in("gameplay"))), page.boxes["gameplay"].stats_label.text())
+        self.tearDownPage(page, settings)
 
-        self.assertEqual(mod.category_key, "graphics")
-        # The row the user was editing must survive, keep its selection, and explain itself.
-        self.assertIs(page.detail_panel.current_mod, mod)
-        self.assertIn(mod, [page.proxy.index(r, 0).data(InstalledModRoles.MOD) for r in range(page.proxy.rowCount())])
-        self.assertTrue(page.card_list.selectionModel().selectedIndexes())
+    def test_remove_is_acknowledged_but_not_wired(self) -> None:
+        page, settings = self.make_page("remove")
+        before = page.mod_model.rowCount()
+        page._request_remove(page.mod_model.mod_at(0))
+        self.app.processEvents()
+        self.assertEqual(page.mod_model.rowCount(), before)
         self.assertTrue(page.notice_label.isVisible())
-        self.assertIn("no longer matches", page.notice_label.text())
+        self.assertIn("later phase", page.notice_label.text())
+        self.tearDownPage(page, settings)
+
+    def test_splitter_state_round_trips_without_error(self) -> None:
+        page, settings = self.make_page("persist")
+        page.save_state()
         page.close()
+
+        page2 = ModManagerPage(settings)
+        page2.show()
+        self.app.processEvents()
+        self.assertEqual(set(page2.boxes), {"graphics", "gameplay", "interface", "uncategorized"})
+        page2.close()
         settings.clear()
 
-    def pin_a_mod_out_of_filter(self, page):
-        page.filter_bar.category_combo.setCurrentIndex(page.filter_bar.category_combo.findData("gameplay"))
-        self.app.processEvents()
-        self.select_first(page)
-        mod = page.detail_panel.current_mod
-        page.detail_panel.category_combo.setCurrentIndex(page.detail_panel.category_combo.findData("graphics"))
-        self.app.processEvents()
-        return mod
-
-    def visible_mods(self, page):
-        return [page.proxy.index(r, 0).data(InstalledModRoles.MOD) for r in range(page.proxy.rowCount())]
-
-    def test_pin_is_dropped_when_a_different_filter_is_chosen(self) -> None:
-        page, settings = self.make_page("pin-drop")
-        mod = self.pin_a_mod_out_of_filter(page)
-        page.filter_bar.category_combo.setCurrentIndex(page.filter_bar.category_combo.findData("interface"))
-        self.app.processEvents()
-        self.assertNotIn(mod, self.visible_mods(page))
-        self.assertFalse(page.notice_label.isVisible())
+    def test_box_geometry_and_collapsed_state_round_trip(self) -> None:
+        page, settings = self.make_page("box-state")
+        expected_geometry = QRect(96, 128, 692, 508)
+        page.box_workspace.set_box_geometry("graphics", expected_geometry)
+        expected_center = QPointF(340, -180)
+        page.box_workspace.restore_view(1.6, expected_center)
+        page.boxes["graphics"].set_collapsed(True)
+        page.save_state()
         page.close()
+
+        page2 = ModManagerPage(settings)
+        page2.show()
+        self.app.processEvents()
+        restored = page2.boxes["graphics"]
+        self.assertEqual(page2.box_workspace.box_geometry("graphics").topLeft(), expected_geometry.topLeft())
+        self.assertTrue(page2.boxes["graphics"].is_collapsed)
+        self.assertFalse(page2.boxes["gameplay"].is_collapsed)
+        self.assertAlmostEqual(page2.box_workspace.zoom_factor, 1.6)
+        restored_center = page2.box_workspace.camera_center()
+        self.assertLess(abs(restored_center.x() - expected_center.x()), 2.0)
+        self.assertLess(abs(restored_center.y() - expected_center.y()), 2.0)
+        restored.set_collapsed(False)
+        self.app.processEvents()
+        self.assertEqual(restored.size(), expected_geometry.size())
+        page2.close()
         settings.clear()
 
-    def test_pin_is_dropped_when_the_same_category_is_re_picked(self) -> None:
-        page, settings = self.make_page("pin-repick")
-        mod = self.pin_a_mod_out_of_filter(page)
-        self.assertIn(mod, self.visible_mods(page))
-        # Re-picking "Gameplay" emits activated but not currentIndexChanged.
-        page.filter_bar.category_combo.activated.emit(page.filter_bar.category_combo.currentIndex())
-        self.app.processEvents()
-        self.assertNotIn(mod, self.visible_mods(page))
-        self.assertFalse(page.notice_label.isVisible())
-        page.close()
-        settings.clear()
-
-    def test_empty_library_and_filtered_empty_states_differ(self) -> None:
-        page, settings = self.make_page("empty-states")
-        page.filter_bar.search_input.setText("zzzz-no-such-mod")
-        self.app.processEvents()
-        self.assertIs(page.content_stack.currentWidget(), page.empty_filtered)
-
-        page.filter_bar.search_input.clear()
-        page.mod_model.beginResetModel()
-        page.mod_model._mods.clear()
-        page.mod_model.endResetModel()
-        self.app.processEvents()
-        self.assertIs(page.content_stack.currentWidget(), page.empty_library)
-        page.close()
-        settings.clear()
-
-    def test_detail_panel_follows_external_model_changes(self) -> None:
-        page, settings = self.make_page("panel-sync")
-        self.select_first(page)
-        mod = page.detail_panel.current_mod
-        page.mod_model.set_priority(mod, 777)
-        self.app.processEvents()
-        self.assertEqual(page.detail_panel.priority_label.text(), "Priority: 777")
-
-        page.mod_model.set_category(mod, "interface")
-        self.app.processEvents()
-        self.assertEqual(page.detail_panel.category_combo.currentData(), "interface")
-        page.close()
-        settings.clear()
-
-    def test_keyboard_space_toggles_and_enter_focuses_details(self) -> None:
-        page, settings = self.make_page("keyboard")
-        index = self.select_first(page)
-        page.card_list.setFocus()
-        mod = index.data(InstalledModRoles.MOD)
-        original = mod.enabled
-        QTest.keyClick(page.card_list, Qt.Key.Key_Space)
-        self.app.processEvents()
-        self.assertEqual(mod.enabled, not original)
-
-        page.detail_panel.show_selection([])
-        QTest.keyClick(page.card_list, Qt.Key.Key_Return)
-        self.app.processEvents()
-        self.assertIs(page.detail_panel.current_mod, mod)
-        page.close()
-        settings.clear()
-
-    def test_card_exposes_only_toggle_and_remove_actions(self) -> None:
-        page, settings = self.make_page("card-actions")
-        delegate = page.card_list.itemDelegate()
-        card = page.card_list.visualRect(page.proxy.index(0, 0))
-        self.assertEqual(len(delegate._action_rects(card)), 2)
-        self.assertFalse(hasattr(delegate, "details_requested"))
-        page.close()
-        settings.clear()
-
-    def test_detail_panel_can_be_collapsed_but_card_list_cannot(self) -> None:
+    def test_detail_pane_is_collapsible_but_grid_is_not(self) -> None:
         page, settings = self.make_page("collapsible")
         self.assertTrue(page.splitter.isCollapsible(1))
         self.assertFalse(page.splitter.isCollapsible(0))
-        page.close()
-        settings.clear()
-
-    def test_keyboard_delete_surfaces_remove_feedback(self) -> None:
-        page, settings = self.make_page("keyboard-delete")
-        index = self.select_first(page)
-        page.card_list.setFocus()
-        mod = index.data(InstalledModRoles.MOD)
-        QTest.keyClick(page.card_list, Qt.Key.Key_Delete)
-        self.app.processEvents()
-        self.assertTrue(page.notice_label.isVisible())
-        self.assertIn(mod.name, page.notice_label.text())
-        page.close()
-        settings.clear()
+        self.tearDownPage(page, settings)
 
     def test_dropping_archives_is_accepted_and_acknowledged(self) -> None:
-        page, settings = self.make_page("drop")
+        page, settings = self.make_page("drop-archive")
         self.assertTrue(page.acceptDrops())
         received: list[list[str]] = []
         page.archives_dropped.connect(received.append)
-
         mime = QMimeData()
         mime.setUrls([QUrl.fromLocalFile("C:/tmp/cool_mod.zip"), QUrl.fromLocalFile("C:/tmp/other.7z")])
         event = QDropEvent(
@@ -336,8 +495,7 @@ class ModManagerPageTests(unittest.TestCase):
         self.assertTrue(event.isAccepted())
         self.assertEqual(received, [["C:/tmp/cool_mod.zip", "C:/tmp/other.7z"]])
         self.assertTrue(page.notice_label.isVisible())
-        page.close()
-        settings.clear()
+        self.tearDownPage(page, settings)
 
     def test_dropping_a_non_archive_is_rejected(self) -> None:
         page, settings = self.make_page("drop-reject")
@@ -354,34 +512,7 @@ class ModManagerPageTests(unittest.TestCase):
         self.app.processEvents()
         self.assertFalse(event.isAccepted())
         self.assertFalse(page.notice_label.isVisible())
-        page.close()
-        settings.clear()
-
-
-class ModelLookupTests(unittest.TestCase):
-    @classmethod
-    def setUpClass(cls) -> None:
-        cls.app = QApplication.instance() or QApplication([])
-
-    def test_row_lookup_uses_object_identity_not_value_equality(self) -> None:
-        mods = make_mock_mods()
-        twin = replace(mods[0])
-        model = InstalledModListModel([twin, *mods])
-        # twin compares equal to mods[0]; the lookup must still find the real object.
-        self.assertEqual(twin, mods[0])
-        self.assertEqual(model.row_for(mods[0]), 1)
-        self.assertEqual(model.row_for(twin), 0)
-
-        model.set_priority(mods[0], 123)
-        self.assertEqual(mods[0].priority, 123)
-        self.assertNotEqual(twin.priority, 123)
-
-    def test_row_lookup_reports_unknown_mods(self) -> None:
-        mods = make_mock_mods()
-        model = InstalledModListModel(mods[1:])
-        self.assertEqual(model.row_for(mods[0]), -1)
-        self.assertFalse(model.set_priority(mods[0], 5))
-        self.assertFalse(model.set_category(mods[0], "graphics"))
+        self.tearDownPage(page, settings)
 
 
 if __name__ == "__main__":

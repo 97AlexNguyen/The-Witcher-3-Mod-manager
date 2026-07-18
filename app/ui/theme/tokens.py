@@ -38,6 +38,22 @@ MOD_CARD_THUMBNAIL_HEIGHT = 88
 CATEGORY_RAIL_WIDTH = 180
 DETAIL_PANEL_WIDTH = 320
 
+# Box (category-group) layout. Every tile is one size and every mod card is one
+# size, on purpose: two widgets with the same job sitting side by side must not
+# differ in dimensions just because their content differs.
+BOX_TILE_WIDTH = 300
+BOX_TILE_HEIGHT = 168
+GROUP_CARD_WIDTH = 300
+GROUP_CARD_HEIGHT = 104
+GROUP_CARD_THUMBNAIL = 44
+BOX_POPUP_WIDTH = 660
+BOX_POPUP_HEIGHT = 520
+BOX_DEFAULT_WIDTH = 420
+BOX_DEFAULT_HEIGHT = 400
+BOX_MIN_HEIGHT = 240
+BOX_COLLAPSED_HEIGHT = 52
+BOX_RESIZE_HANDLE_SIZE = 24
+
 COLOR_SUCCESS = "#1e7d4a"
 COLOR_WARNING = "#b45309"
 COLOR_DANGER = "#ba1a1a"

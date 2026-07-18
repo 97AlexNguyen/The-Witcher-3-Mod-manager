@@ -8,6 +8,7 @@ from app.ui.theme.tokens import (
     FONT_MONO,
     RADIUS_DEFAULT,
     RADIUS_LG,
+    RADIUS_MD,
     RADIUS_SM,
     SPACING_MD,
     SPACING_SM,
@@ -22,6 +23,7 @@ from app.ui.theme.tokens import (
     LIGHT,
     ThemeColors,
     COLOR_DANGER,
+    COLOR_WARNING,
 )
 
 
@@ -66,9 +68,41 @@ QLineEdit:hover, QComboBox:hover, QSpinBox:hover {{ border-color: {c.outline}; }
 QLineEdit:focus, QComboBox:focus, QSpinBox:focus {{ border: 2px solid {c.primary}; }}
 QComboBox::drop-down {{ width: 24px; border: none; }}
 QComboBox QAbstractItemView {{ background: {c.surface_lowest}; border: 1px solid {c.outline_variant}; selection-background-color: {c.primary_fixed}; selection-color: {c.on_surface}; }}
-QListView#modCardList {{ background: transparent; border: none; padding: 0; }}
-QListView#modCardList::item {{ background: transparent; border: none; }}
-QListView#modCardList::item:selected {{ background: transparent; }}
+QScrollArea#shelfScroll {{ background: transparent; border: none; }}
+QScrollArea#shelfScroll > QWidget > QWidget {{ background: transparent; }}
+QWidget#shelfSurface {{ background: transparent; }}
+QGraphicsView#boxWorkspace {{ border: none; background: transparent; }}
+QFrame#canvasControls {{ background: {c.surface_lowest}; border: 1px solid {c.outline_variant}; border-radius: {RADIUS_LG}px; }}
+QLabel#canvasHint {{ color: {c.on_surface_variant}; font-size: {TYPO_LABEL_SM[0]}px; }}
+QLabel#canvasZoomLabel {{ color: {c.on_surface}; font-size: {TYPO_LABEL_SM[0]}px; font-weight: 600; }}
+QToolButton#canvasControlButton {{ background: transparent; color: {c.on_surface_variant}; border: 1px solid transparent; border-radius: {RADIUS_DEFAULT}px; font-weight: 600; }}
+QToolButton#canvasControlButton:hover {{ background: {c.surface_high}; color: {c.on_surface}; border-color: {c.outline_variant}; }}
+QToolButton#canvasControlButton:pressed {{ background: {c.primary_fixed}; color: {c.primary}; }}
+QToolButton#canvasControlButton:focus {{ border-color: {c.primary}; }}
+QToolButton#canvasControlButton:disabled {{ color: {c.outline_variant}; }}
+QFrame#categoryBox {{ background: {c.surface}; border: 1px solid {c.outline_variant}; border-radius: {RADIUS_LG}px; }}
+QFrame#categoryBox[dropActive="true"] {{ border: 2px solid {c.primary}; }}
+QFrame#categoryBox[collapsed="true"] {{ background: {c.surface_lowest}; }}
+QScrollArea#boxScroll {{ background: transparent; border: none; }}
+QScrollArea#boxScroll > QWidget > QWidget {{ background: transparent; }}
+QLabel#boxStats {{ color: {c.on_surface_variant}; background: {c.surface_lowest}; border-radius: 10px; padding: 2px 10px; }}
+QLabel#boxTileAttention {{ color: {COLOR_WARNING}; font-weight: 600; }}
+QToolButton#boxDragHandle, QToolButton#boxCollapseButton, QToolButton#boxResizeHandle {{ background: transparent; color: {c.on_surface_variant}; border: 1px solid transparent; border-radius: {RADIUS_DEFAULT}px; font-size: 16px; }}
+QToolButton#boxDragHandle:hover, QToolButton#boxCollapseButton:hover, QToolButton#boxResizeHandle:hover {{ background: {c.surface_high}; color: {c.on_surface}; border-color: {c.outline_variant}; }}
+QToolButton#boxDragHandle:pressed, QToolButton#boxCollapseButton:pressed, QToolButton#boxResizeHandle:pressed {{ background: {c.primary_fixed}; color: {c.primary}; }}
+QToolButton#boxDragHandle:focus, QToolButton#boxCollapseButton:focus, QToolButton#boxResizeHandle:focus {{ border: 1px solid {c.primary}; }}
+QToolButton#boxDragHandle:disabled, QToolButton#boxCollapseButton:disabled, QToolButton#boxResizeHandle:disabled {{ color: {c.outline_variant}; }}
+QSplitter#boxGrid::handle, QSplitter[objectName^="boxRow"]::handle {{ background: transparent; }}
+QSplitter#boxGrid::handle:hover, QSplitter[objectName^="boxRow"]::handle:hover {{ background: {c.primary}; }}
+QFrame#modCard {{ background: {c.surface_low}; border: 1px solid {c.outline_variant}; border-radius: {RADIUS_MD}px; }}
+QFrame#modCard:hover {{ border-color: {c.outline}; }}
+QLabel#modCardName {{ color: {c.on_surface}; }}
+QFrame#modCard[modEnabled="false"] QLabel#modCardName {{ color: {c.on_surface_variant}; }}
+QToolButton#modToggle {{ background: {c.surface_high}; color: {c.on_surface_variant}; border: 1px solid {c.outline_variant}; border-radius: 11px; font-size: 9px; font-weight: 700; }}
+QToolButton#modToggle:checked {{ background: {c.primary_fixed}; color: {c.primary}; border-color: {c.primary}; }}
+QToolButton#cardMenuButton {{ background: transparent; border: none; color: {c.on_surface_variant}; font-size: 16px; }}
+QToolButton#cardMenuButton:hover {{ color: {c.on_surface}; }}
+QToolButton#cardMenuButton::menu-indicator {{ image: none; width: 0; }}
 QWidget#emptyState {{ background: {c.surface_lowest}; border: 1px solid {c.outline_variant}; border-radius: {RADIUS_LG}px; }}
 QLabel#noticeBar {{ padding: {SPACING_SM}px {SPACING_MD}px; background: {c.primary_fixed}; color: {c.primary}; border: 1px solid {c.primary}; border-radius: {RADIUS_DEFAULT}px; font-size: {TYPO_BODY_SM[0]}px; }}
 QScrollArea#detailScroll {{ background: transparent; border: none; }}
