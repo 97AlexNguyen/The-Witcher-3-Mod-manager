@@ -45,7 +45,10 @@ BOX_TILE_WIDTH = 300
 BOX_TILE_HEIGHT = 168
 GROUP_CARD_WIDTH = 300
 GROUP_CARD_HEIGHT = 104
+# Card preview is 16:9 — Nexus cover art is landscape, so a square crop threw
+# most of it away. Height stays 44; width follows the 16:9 ratio (44 * 16/9).
 GROUP_CARD_THUMBNAIL = 44
+GROUP_CARD_THUMBNAIL_W = 78
 BOX_POPUP_WIDTH = 660
 BOX_POPUP_HEIGHT = 520
 BOX_DEFAULT_WIDTH = 420

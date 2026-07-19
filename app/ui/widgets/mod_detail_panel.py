@@ -112,10 +112,17 @@ class ModDetailPanel(QFrame):
         meta_layout.setSpacing(SPACING_XS)
         self.version_label = QLabel()
         self.installed_label = QLabel()
+        self.size_label = QLabel()
         self.priority_label = QLabel()
         self.vault_label = QLabel()
         self.vault_label.setWordWrap(True)
-        for label in (self.version_label, self.installed_label, self.priority_label, self.vault_label):
+        for label in (
+            self.version_label,
+            self.installed_label,
+            self.size_label,
+            self.priority_label,
+            self.vault_label,
+        ):
             label.setProperty("class", "muted")
             meta_layout.addWidget(label)
         layout.addWidget(meta)
@@ -210,6 +217,7 @@ class ModDetailPanel(QFrame):
         self.description_label.setText(mod.description)
         self.version_label.setText(f"Version: {mod.version or '?'}")
         self.installed_label.setText(f"Installed: {mod.installed_on.isoformat()}")
+        self.size_label.setText(f"Size: {self._format_size(mod.size_bytes)}")
         self.priority_label.setText(
             f"Priority: {'Unassigned' if mod.priority is None else mod.priority}"
         )
@@ -225,6 +233,18 @@ class ModDetailPanel(QFrame):
         with QSignalBlocker(self.category_combo):
             index = self.category_combo.findData(mod.category_key)
             self.category_combo.setCurrentIndex(max(0, index))
+
+    @staticmethod
+    def _format_size(size_bytes: int | None) -> str:
+        if not isinstance(size_bytes, int) or size_bytes < 0:
+            return "Unknown"
+        size = float(size_bytes)
+        for unit in ("B", "KB", "MB", "GB"):
+            if size < 1024 or unit == "GB":
+                precision = 0 if unit == "B" else 1
+                return f"{size:.{precision}f} {unit}"
+            size /= 1024
+        return f"{size:.1f} GB"
 
     @staticmethod
     def _format_groups(groups: dict[str, tuple[str, ...]], empty_message: str) -> str:

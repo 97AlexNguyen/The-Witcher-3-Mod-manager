@@ -23,6 +23,7 @@ from app.ui.theme.tokens import (
     COLOR_WARNING,
     GROUP_CARD_HEIGHT,
     GROUP_CARD_THUMBNAIL,
+    GROUP_CARD_THUMBNAIL_W,
     GROUP_CARD_WIDTH,
     RADIUS_DEFAULT,
     SPACING_SM,
@@ -123,8 +124,8 @@ class ModCard(QFrame):
         top = QHBoxLayout()
         top.setSpacing(SPACING_SM)
         thumb = QLabel()
-        thumb.setFixedSize(GROUP_CARD_THUMBNAIL, GROUP_CARD_THUMBNAIL)
-        pixmap = thumbnails.pixmap(mod, accent, QSize(GROUP_CARD_THUMBNAIL, GROUP_CARD_THUMBNAIL), dark_theme)
+        thumb.setFixedSize(GROUP_CARD_THUMBNAIL_W, GROUP_CARD_THUMBNAIL)
+        pixmap = thumbnails.pixmap(mod, accent, QSize(GROUP_CARD_THUMBNAIL_W, GROUP_CARD_THUMBNAIL), dark_theme)
         thumb.setPixmap(self._rounded(pixmap, RADIUS_DEFAULT))
         top.addWidget(thumb, 0, Qt.AlignmentFlag.AlignTop)
 
@@ -132,7 +133,7 @@ class ModCard(QFrame):
         name_font.setPointSize(TYPO_BODY_MD[0])
         name_font.setWeight(QFont.Weight.DemiBold)
         metrics = QFontMetrics(name_font)
-        name_width = GROUP_CARD_WIDTH - 2 * (SPACING_SM + SPACING_XS) - GROUP_CARD_THUMBNAIL - SPACING_SM
+        name_width = GROUP_CARD_WIDTH - 2 * (SPACING_SM + SPACING_XS) - GROUP_CARD_THUMBNAIL_W - SPACING_SM
         self.name_label = QLabel(_wrap_elided(metrics, mod.name, name_width, _NAME_LINES))
         self.name_label.setObjectName("modCardName")
         self.name_label.setFont(name_font)

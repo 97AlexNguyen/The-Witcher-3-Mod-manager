@@ -2,12 +2,20 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from PyQt6.QtCore import QByteArray, QPointF, QRect, QSettings, Qt, QTimer, pyqtSignal
-from PyQt6.QtGui import QColor, QDragEnterEvent, QDropEvent
+from PyQt6.QtCore import (
+    QByteArray,
+    QPointF,
+    QRect,
+    QSettings,
+    Qt,
+    QThreadPool,
+    QTimer,
+    pyqtSignal,
+)
+from PyQt6.QtGui import QColor, QCursor, QDragEnterEvent, QDropEvent
 from PyQt6.QtWidgets import (
     QFileDialog,
     QHBoxLayout,
-    QInputDialog,
     QLabel,
     QMenu,
     QMessageBox,
@@ -18,15 +26,29 @@ from PyQt6.QtWidgets import (
 
 from app.config import CheckLevel, load_config, validate_game_path
 from app.apis.nexus_metadata import NexusLookupError, lookup_archive_metadata
+from app.apis.nexus_thumbnail import cache_thumbnail
 from app.data import (
     UNCATEGORIZED_CATEGORY_NAME,
+    load_category_catalog,
     palette_color_key,
     preferred_install_category_name,
     slugify,
 )
 from app.domain import Category, InstalledMod
-from app.install import InstallError, UninstallError, install_archive, uninstall_mod
+from app.install import (
+    InstallError,
+    UninstallError,
+    inspect_archive,
+    parse_archive_name,
+    uninstall_mod,
+)
 from app.manifest import Manifest, ManifestStore
+from app.ui.dialogs import (
+    InstallDecision,
+    InstallProgressDialog,
+    InstallReviewDialog,
+    InstallWorker,
+)
 from app.ui.models import InstalledModListModel, InstalledModRoles
 from app.ui.services import ThumbnailProvider
 from app.ui.theme.tokens import SPACING_LG, SPACING_MD, SPACING_SM
@@ -306,33 +328,61 @@ class ModManagerPage(QWidget):
             else:
                 remove_action.triggered.connect(lambda _=False, k=key: self._remove_category(k))
             menu.addSeparator()
-        create_action = menu.addAction("New category…")
-        create_action.triggered.connect(lambda: self._prompt_create_category())
+        menu.addMenu(self._build_create_category_menu("New category"))
         menu.setToolTipsVisible(True)
         menu.exec(global_pos)
 
-    def _prompt_create_category(self) -> None:
-        name, ok = QInputDialog.getText(self, "New category", "Category name:")
-        if ok:
-            self._create_category(name)
+    def _available_catalog_categories(self) -> list[Category]:
+        """Catalog categories that don't yet have a box, sorted by name.
 
-    def _create_category(self, name: str) -> None:
-        """Create a user-made category and place its (empty) box on the canvas."""
-        name = name.strip()
-        if not name:
-            return
-        for category in self._registry.values():
-            if category.name.casefold() == name.casefold():
-                self._show_notice(f"A category named '{category.name}' already exists.")
-                return
-        key = self._unique_key(slugify(name))
-        self._registry[key] = Category(
-            key, name, palette_color_key(len(self._registry)), user_created=True
+        Each category maps to at most one box, so once a category is active
+        (has a box) it drops out of the "new category" menu. Uncategorized is
+        the permanent home and is never offered here."""
+        active = self._active_category_keys()
+        return sorted(
+            (
+                category
+                for category in load_category_catalog()
+                if category.key != UNCATEGORIZED.key and category.key not in active
+            ),
+            key=lambda c: c.name.casefold(),
         )
-        self._pinned_keys.add(key)
+
+    def _build_create_category_menu(self, title: str = "New category") -> QMenu:
+        """A menu listing every catalog category that doesn't yet have a box.
+
+        Each entry creates that category directly on click. When all categories
+        are already placed the menu holds a single disabled hint."""
+        menu = QMenu(title, self)
+        available = self._available_catalog_categories()
+        if not available:
+            empty = menu.addAction("All categories already have a box")
+            empty.setEnabled(False)
+            return menu
+        for category in available:
+            action = menu.addAction(category.name)
+            action.triggered.connect(
+                lambda _=False, c=category: self._create_category(c)
+            )
+        return menu
+
+    def _prompt_create_category(self) -> None:
+        menu = self._build_create_category_menu()
+        menu.exec(QCursor.pos())
+
+    def _create_category(self, template: Category) -> None:
+        """Create a user-made category from the catalog and place its (empty)
+        box on the canvas."""
+        if template.key in self._registry or template.key in self._active_category_keys():
+            self._show_notice(f"A category named '{template.name}' already exists.")
+            return
+        self._registry[template.key] = Category(
+            template.key, template.name, template.color_key, user_created=True
+        )
+        self._pinned_keys.add(template.key)
         self._reconcile_boxes(rebuild_body=True)  # creates the box (free placement)
         self._schedule_manifest_save()
-        self._show_notice(f"Created category '{name}'.")
+        self._show_notice(f"Created category '{template.name}'.")
 
     def _remove_category(self, key: str) -> None:
         """Remove an empty user-created category and its box."""
@@ -571,17 +621,19 @@ class ModManagerPage(QWidget):
             self.install_archives(paths)
 
     def install_archives(self, paths: list[str], category_key: str | None = None) -> None:
-        """Install each archive to disk and record it in the manifest.
+        """Review each archive in a pre-install dialog, then install on confirm.
+
+        Rather than installing silently, each archive is first *inspected* (its
+        entry listing read, without extracting to disk) so the user can see an
+        overview (Nexus data, cover art), what the install will put on disk, and
+        edit how it is filed (name, category, enabled). Only when they confirm is
+        the archive actually extracted and installed — a cancelled archive is
+        never unpacked. ``category_key`` only seeds the dialog's default category;
+        the user's choice in the dialog wins.
 
         Synchronous for now — extraction/merge threading is a separate roadmap
         step. Game-config merges are deliberately not performed here yet, so a
         mod with config needs installs its files but leaves those merges pending.
-
-        With no explicit ``category_key``, each archive is filed automatically
-        from its verified Nexus metadata. Adult content always goes to the
-        dedicated Adult Content category, ahead of Nexus's normal taxonomy.
-        Passing a key remains available for callers that intentionally override
-        automatic categorisation.
         """
         if not self._store.can_write:
             self._show_notice(
@@ -600,37 +652,157 @@ class ModManagerPage(QWidget):
         installed: list[str] = []
         failures: list[str] = []
         warnings: list[str] = []
-        for path in paths:
-            resolved_category_key = category_key
-            category_name: str | None = None
-            if resolved_category_key is None:
-                try:
-                    metadata = lookup_archive_metadata(Path(path).name)
-                except NexusLookupError as exc:
-                    category_name = UNCATEGORIZED.name
-                    warnings.append(
-                        f"{Path(path).name}: Nexus metadata unavailable ({exc}); "
-                        f"filed under {UNCATEGORIZED.name}"
-                    )
-                else:
-                    category_name = preferred_install_category_name(
-                        metadata.category_name,
-                        contains_adult_content=metadata.contains_adult_content,
-                    )
-
-            try:
-                result = install_archive(path, config.game_path, config.vault_path)
-            except (InstallError, OSError) as exc:
-                failures.append(f"{Path(path).name}: {exc}")
-                continue
-            if resolved_category_key is None:
-                resolved_category_key = self._resolve_category_name(
-                    category_name or UNCATEGORIZED.name
-                )
-            self._register_installed_mod(result.mod, resolved_category_key)
-            installed.append(result.mod.name)
+        for index, path in enumerate(paths):
+            cancelled = self._review_and_install(
+                path, config, category_key, index, len(paths),
+                installed, failures, warnings,
+            )
+            if cancelled:
+                break
 
         self._report_install(installed, failures, warnings)
+
+    def _review_and_install(
+        self,
+        path: str,
+        config,
+        category_key: str | None,
+        index: int,
+        total: int,
+        installed: list[str],
+        failures: list[str],
+        warnings: list[str],
+    ) -> bool:
+        """Prepare, review, and (on confirm) install one archive.
+
+        Returns ``True`` when the user chose *Cancel all*, signalling the caller
+        to abandon the rest of the batch. Inspection/extraction failures are
+        recorded in ``failures`` and swallowed so one bad archive doesn't sink the
+        others.
+        """
+        name = Path(path).name
+        metadata = self._lookup_metadata(name)
+        # Read the archive listing only (no extraction to disk yet) to preview it.
+        try:
+            preview = inspect_archive(path)
+        except (InstallError, OSError) as exc:
+            failures.append(f"{name}: {exc}")
+            return False
+
+        # Fetch the Nexus cover once: it is the dialog preview now and the mod's
+        # card image after install. A failed download leaves None, which the
+        # placeholder cover handles.
+        thumbnail = cache_thumbnail(metadata.to_dict()) if metadata else None
+        dialog = InstallReviewDialog(
+            preview=preview,
+            metadata=metadata,
+            archive_path=Path(path),
+            thumbnail_path=thumbnail,
+            category_options=self._category_name_options(),
+            suggested_category=self._suggested_category_name(metadata, category_key),
+            default_name=self._default_mod_name(metadata, path),
+            index=index,
+            total=total,
+            parent=self,
+        )
+        dialog.exec()
+        decision = dialog.decision()
+        if decision is InstallDecision.CANCEL_ALL:
+            return True
+        if decision is not InstallDecision.INSTALL:
+            return False  # skipped: nothing was extracted, move to the next
+
+        choices = dialog.choices()
+        # Only now, on the user's confirmation, is the archive actually unpacked —
+        # and it runs on a worker thread behind a progress dialog so a multi-GB
+        # mod doesn't freeze the UI.
+        result, error = self._run_install_worker(path, config, metadata, choices)
+        if error is not None:
+            failures.append(f"{name}: {error}")
+            return False
+        if result is None:
+            failures.append(f"{name}: install did not complete.")
+            return False
+
+        result.mod.enabled = choices.enabled
+        if thumbnail:
+            result.mod.thumbnail_path = thumbnail
+        resolved_key = self._resolve_category_name(
+            choices.category_name or UNCATEGORIZED.name
+        )
+        self._register_installed_mod(result.mod, resolved_key)
+        installed.append(result.mod.name)
+        return False
+
+    def _run_install_worker(self, path, config, metadata, choices):
+        """Run the confirmed install on a worker thread behind a modal progress
+        dialog. Returns ``(InstallResult | None, Exception | None)`` once done.
+
+        ``dialog.exec()`` spins a nested event loop that keeps the UI painting and
+        the progress bar updating while the worker runs; the finished/failed
+        handlers stash the outcome and end the loop."""
+        worker = InstallWorker(
+            archive_path=path,
+            game_path=config.game_path,
+            vault_path=config.vault_path,
+            nexus_metadata=metadata.to_dict() if metadata else None,
+            name_override=choices.name,
+        )
+        dialog = InstallProgressDialog(choices.name or Path(path).stem, parent=self)
+        outcome: dict[str, object] = {"result": None, "error": None}
+
+        def done(result=None, error=None) -> None:
+            outcome["result"] = result
+            outcome["error"] = error
+            dialog.finish(result, error)
+
+        worker.signals.progress.connect(dialog.update_progress)
+        worker.signals.finished.connect(lambda result: done(result=result))
+        worker.signals.failed.connect(lambda error: done(error=error))
+        # Hold a reference so the signals object isn't collected mid-flight.
+        self._install_worker = worker
+        QThreadPool.globalInstance().start(worker)
+        dialog.exec()
+        self._install_worker = None
+        return outcome["result"], outcome["error"]
+
+    @staticmethod
+    def _lookup_metadata(filename: str):
+        """Best-effort Nexus lookup; the dialog explains an absent match, so a
+        failed lookup is not an error here — it just yields no metadata."""
+        try:
+            return lookup_archive_metadata(filename)
+        except NexusLookupError:
+            return None
+
+    def _suggested_category_name(self, metadata, category_key: str | None) -> str:
+        """The category the dialog defaults to: a caller-pinned one, else the one
+        derived from Nexus metadata, else Uncategorized."""
+        if category_key is not None:
+            pinned = self._registry.get(category_key)
+            if pinned is not None:
+                return pinned.name
+        if metadata is not None:
+            return preferred_install_category_name(
+                metadata.category_name,
+                contains_adult_content=metadata.contains_adult_content,
+            )
+        return UNCATEGORIZED.name
+
+    def _category_name_options(self) -> list[str]:
+        """Category names offered in the dialog dropdown: the active ones plus the
+        full catalog, so the user can file into an existing box or a known kind."""
+        names = {UNCATEGORIZED.name}
+        names.update(category.name for category in self._registry.values())
+        names.update(category.name for category in load_category_catalog())
+        return sorted(names, key=str.casefold)
+
+    @staticmethod
+    def _default_mod_name(metadata, path: str) -> str:
+        if metadata is not None and metadata.mod_name:
+            return metadata.mod_name
+        guessed, _version = parse_archive_name(Path(path).name)
+        return guessed or Path(path).stem
 
     def _resolve_category_name(self, name: str) -> str:
         """Map a category name to a key, creating a new category if needed."""

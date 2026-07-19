@@ -56,6 +56,11 @@ QLabel[class="status-error"] {{ color: {COLOR_DANGER}; font-size: {TYPO_BODY_SM[
 QLabel[class="status-muted"] {{ color: {c.on_surface_variant}; font-size: {TYPO_BODY_SM[0]}px; }}
 QDialog {{ background: {c.background}; }}
 QFrame#settingsSection {{ background: {c.surface_lowest}; border: 1px solid {c.outline_variant}; border-radius: {RADIUS_LG}px; }}
+QScrollArea#reviewScroll, QScrollArea#reviewReadmeScroll {{ background: transparent; border: none; }}
+QScrollArea#reviewScroll > QWidget > QWidget, QScrollArea#reviewReadmeScroll > QWidget > QWidget {{ background: transparent; }}
+QLabel#reviewPreview {{ background: {c.surface_high}; border: 1px solid {c.outline_variant}; border-radius: {RADIUS_MD}px; color: {c.on_surface_variant}; }}
+QProgressBar#installProgressBar {{ min-height: 8px; max-height: 8px; background: {c.surface_high}; border: none; border-radius: {RADIUS_SM}px; }}
+QProgressBar#installProgressBar::chunk {{ background: {c.primary}; border-radius: {RADIUS_SM}px; }}
 QPushButton {{ min-height: 34px; padding: 0 {SPACING_MD}px; border: 1px solid {c.outline_variant}; border-radius: {RADIUS_DEFAULT}px; background: {c.surface_lowest}; font-size: {TYPO_LABEL_MD[0]}px; font-weight: {TYPO_LABEL_MD[1]}; }}
 QPushButton:hover {{ background: {c.surface_low}; border-color: {c.outline}; }}
 QPushButton:pressed {{ background: {c.surface_high}; }}

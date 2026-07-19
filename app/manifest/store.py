@@ -118,6 +118,8 @@ def _mod_to_dict(mod: InstalledMod) -> dict:
         "status_detail": mod.status_detail,
         "vault": mod.vault_path,
         "thumbnail": mod.thumbnail_path,
+        "size_bytes": mod.size_bytes,
+        "nexus_metadata": mod.nexus_metadata,
     }
 
 
@@ -147,6 +149,8 @@ def _mod_from_dict(raw) -> InstalledMod | None:
         status_detail=raw.get("status_detail") if isinstance(raw.get("status_detail"), str) else "",
         vault_path=raw.get("vault") if isinstance(raw.get("vault"), str) else None,
         thumbnail_path=raw.get("thumbnail") if isinstance(raw.get("thumbnail"), str) else None,
+        size_bytes=_as_opt_int(raw.get("size_bytes")),
+        nexus_metadata=raw.get("nexus_metadata") if isinstance(raw.get("nexus_metadata"), dict) else None,
     )
 
 

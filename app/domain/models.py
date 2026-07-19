@@ -42,3 +42,10 @@ class InstalledMod:
     status_detail: str = "Installed cleanly"
     vault_path: str | None = None
     thumbnail_path: str | None = None
+    # Archive size in bytes, taken from the Nexus file record at install time.
+    size_bytes: int | None = None
+    # The Nexus metadata JSON exactly as parsed when this mod was installed. It
+    # is a point-in-time snapshot — the mod page may change or vanish upstream —
+    # so it is cached here rather than re-fetched. None when the archive was not
+    # matched to a Nexus file (e.g. no API key, or a hand-built archive).
+    nexus_metadata: dict | None = None
